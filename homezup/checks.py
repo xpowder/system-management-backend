@@ -10,7 +10,8 @@ def production_misconfigurations(debug, secret_key, allowed_hosts, testing=False
     if not secret or secret == DEV_SECRET or len(secret) < 32:
         errors.append(
             "DJANGO_SECRET_KEY must be a unique value of at least 32 characters "
-            "when DJANGO_DEBUG=False."
+            "when DJANGO_DEBUG=False. Do not use quotes, and do not use # "
+            "(it truncates the value in many env editors)."
         )
     if not allowed_hosts:
         errors.append("DJANGO_ALLOWED_HOSTS must be set when DJANGO_DEBUG=False.")

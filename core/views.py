@@ -14,6 +14,10 @@ def _safe_dist_file(relative: str) -> Path:
     return target
 
 
+def healthz(request):
+    return HttpResponse("ok", content_type="text/plain; charset=utf-8")
+
+
 def spa_index(request, rest=""):
     index = Path(settings.FRONTEND_DIST) / "index.html"
     if not index.is_file():

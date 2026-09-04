@@ -27,7 +27,7 @@ TESTING = "test" in sys.argv
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
-SECRET_KEY = config("DJANGO_SECRET_KEY", default=DEV_SECRET)
+SECRET_KEY = (config("DJANGO_SECRET_KEY", default=DEV_SECRET) or "").strip().strip('"').strip("'")
 DEBUG = config("DJANGO_DEBUG", default=True, cast=bool)
 ON_RAILWAY = bool(config("RAILWAY_ENVIRONMENT", default=""))
 ALLOWED_HOSTS = list(
@@ -222,11 +222,13 @@ USE_HTTPS = config("DJANGO_HTTPS", default=ON_RAILWAY, cast=bool)
 if USE_HTTPS:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    SECURE_SSL_REDIRECT = True
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
-    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    # Railway (and most PaaS) terminate TLS. Redirecting HTTP→HTTPS here
+    # breaks platform healthchecks that hit http://0.0.0.0:$PORT.
+    SECURE_SSL_REDIRECT = config("DJANGO_SSL_REDIRECT", default=False, cast=bool)
 
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
@@ -243,7 +245,28 @@ if USE_HTTPS and uses_cross_site_cookies(
     CSRF_COOKIE_SAMESITE = "None"
 
 LOG_DIR = BASE_DIR / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+try:
+    LOG_DIR.mkdir(exist_ok=True)
+    _log_file_ok = True
+except OSError:
+    _log_file_ok = False
+_log_handlers = ["console"]
+_handlers = {
+    "console": {
+        "class": "logging.StreamHandler",
+        "formatter": "standard",
+    },
+}
+if _log_file_ok:
+    _log_handlers = ["console", "file"]
+    _handlers["file"] = {
+        "class": "logging.handlers.RotatingFileHandler",
+        "filename": LOG_DIR / "flexoper.log",
+        "maxBytes": 2_000_000,
+        "backupCount": 5,
+        "encoding": "utf-8",
+        "formatter": "standard",
+    }
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -253,28 +276,15 @@ LOGGING = {
             "style": "{",
         },
     },
-    "handlers": {
-        "console": {
-            "class": "logging.StreamHandler",
-            "formatter": "standard",
-        },
-        "file": {
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": LOG_DIR / "flexoper.log",
-            "maxBytes": 2_000_000,
-            "backupCount": 5,
-            "encoding": "utf-8",
-            "formatter": "standard",
-        },
-    },
+    "handlers": _handlers,
     "loggers": {
         "django.request": {
-            "handlers": ["console", "file"],
+            "handlers": _log_handlers,
             "level": "ERROR",
             "propagate": False,
         },
         "django.security": {
-            "handlers": ["console", "file"],
+            "handlers": _log_handlers,
             "level": "WARNING",
             "propagate": False,
         },

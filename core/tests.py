@@ -23,6 +23,11 @@ class SpaAndDeliveryTests(TestCase):
         self.assertNotEqual(response.status_code, 503)
         self.assertIn(response.status_code, (200, 401, 403))
 
+    def test_healthz_returns_ok(self):
+        response = self.client.get("/healthz")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"ok")
+
     def test_check_delivery_passes_with_a_staff_user(self):
         User = get_user_model()
         User.objects.create_superuser(username="desk", email="desk@gym.local", password="pass-word")
