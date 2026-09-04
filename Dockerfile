@@ -24,7 +24,8 @@ RUN mkdir -p logs media staticfiles \
 
 # LF-only scripts so a Windows checkout cannot break the Linux container.
 COPY start.sh /app/start.sh
-RUN chmod +x /app/start.sh \
+RUN sed -i 's/\r$//' /app/start.sh \
+    && chmod +x /app/start.sh \
     && printf '%s\n' \
     '#!/bin/sh' \
     'set -e' \
@@ -37,6 +38,6 @@ RUN chmod +x /app/start.sh \
     > /app/create-superuser.sh \
     && chmod +x /app/create-superuser.sh
 
-# No ENTRYPOINT. Railway startCommand replaces CMD; combining both
-# prepends start.sh arguments and can skip Gunicorn.
-CMD ["/bin/sh", "/app/start.sh"]
+# Railway uses this unless a dashboard Start Command is set.
+# toml startCommand is the same path so nothing else overrides it.
+CMD ["/app/start.sh"]

@@ -9,7 +9,7 @@ if [ -z "$PORT" ]; then
 fi
 
 echo "PORT detected"
-echo "Starting homezup.wsgi:application on 0.0.0.0:$PORT"
+echo "Starting Homezup backend on 0.0.0.0:$PORT"
 echo "Running migrations"
 python manage.py migrate --noinput
 echo "Migrations done. Starting Gunicorn."
@@ -18,7 +18,6 @@ exec python -m gunicorn homezup.wsgi:application \
   --workers 2 \
   --threads 2 \
   --timeout 120 \
-  --worker-tmp-dir /dev/shm \
   --access-logfile - \
   --error-logfile - \
   --log-level info
