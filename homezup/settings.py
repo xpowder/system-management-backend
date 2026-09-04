@@ -18,6 +18,7 @@ from django.core.exceptions import ImproperlyConfigured
 
 from homezup.checks import DEV_SECRET, production_misconfigurations
 from homezup.database import build_databases
+from homezup.origins import merge_frontend_origin, uses_cross_site_cookies
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -45,6 +46,12 @@ if ON_RAILWAY:
     ):
         if _host and _host not in ALLOWED_HOSTS:
             ALLOWED_HOSTS.append(_host)
+
+FRONTEND_ORIGIN = config(
+    "DJANGO_FRONTEND_ORIGIN",
+    default="https://system-management-production-5616.up.railway.app" if ON_RAILWAY else "",
+)
+ALLOWED_HOSTS, _ = merge_frontend_origin(ALLOWED_HOSTS, [], FRONTEND_ORIGIN)
 _production_errors = production_misconfigurations(DEBUG, SECRET_KEY, ALLOWED_HOSTS, TESTING)
 if _production_errors:
     raise ImproperlyConfigured(" ".join(_production_errors))
@@ -200,6 +207,12 @@ if ON_RAILWAY:
         if _origin not in CORS_ALLOWED_ORIGINS:
             CORS_ALLOWED_ORIGINS.append(_origin)
 
+ALLOWED_HOSTS, CORS_ALLOWED_ORIGINS = merge_frontend_origin(
+    ALLOWED_HOSTS,
+    CORS_ALLOWED_ORIGINS,
+    FRONTEND_ORIGIN,
+)
+
 CORS_ALLOW_CREDENTIALS = True
 CORS_EXPOSE_HEADERS = ['Content-Disposition']
 
@@ -222,6 +235,12 @@ SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_HTTPONLY = False
+if USE_HTTPS and uses_cross_site_cookies(
+    FRONTEND_ORIGIN,
+    config("RAILWAY_PUBLIC_DOMAIN", default=""),
+):
+    SESSION_COOKIE_SAMESITE = "None"
+    CSRF_COOKIE_SAMESITE = "None"
 
 LOG_DIR = BASE_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)

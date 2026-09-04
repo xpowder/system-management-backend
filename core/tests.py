@@ -7,6 +7,7 @@ from django.core.management import call_command
 from django.test import TestCase, override_settings
 
 from homezup.checks import DEV_SECRET, production_misconfigurations
+from homezup.origins import merge_frontend_origin, uses_cross_site_cookies
 
 
 class SpaAndDeliveryTests(TestCase):
@@ -151,6 +152,31 @@ class ProductionSettingsTests(TestCase):
             allowed_hosts=["localhost"],
         )
         self.assertEqual(errors, [])
+
+
+class FrontendOriginTests(TestCase):
+    def test_merges_production_frontend_into_cors_and_hosts(self):
+        hosts, cors = merge_frontend_origin(
+            ["api.example.com"],
+            ["http://localhost:5173"],
+            "https://system-management-production-5616.up.railway.app",
+        )
+        self.assertIn("system-management-production-5616.up.railway.app", hosts)
+        self.assertIn("https://system-management-production-5616.up.railway.app", cors)
+
+    def test_cross_site_cookies_when_frontend_is_a_different_host(self):
+        self.assertTrue(
+            uses_cross_site_cookies(
+                "https://system-management-production-5616.up.railway.app",
+                "other-service.up.railway.app",
+            )
+        )
+        self.assertFalse(
+            uses_cross_site_cookies(
+                "https://system-management-production-5616.up.railway.app",
+                "system-management-production-5616.up.railway.app",
+            )
+        )
 
 
 class MediaServeTests(TestCase):
