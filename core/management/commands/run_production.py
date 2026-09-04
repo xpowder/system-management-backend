@@ -25,6 +25,7 @@ class Command(BaseCommand):
             host = host or "0.0.0.0"
             port = int(port or 8000)
         self.stdout.write(self.style.SUCCESS(f"FlexOper production server: http://{host}:{port}"))
+        self.stdout.write("Request logs go to stdout (Railway → service → Deployments → View logs).")
         serve(
             application,
             host=host,

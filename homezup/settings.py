@@ -83,6 +83,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'core.middleware.RequestLogMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -277,15 +278,34 @@ LOGGING = {
         },
     },
     "handlers": _handlers,
+    "root": {
+        "handlers": ["console"],
+        "level": "INFO",
+    },
     "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
         "django.request": {
             "handlers": _log_handlers,
-            "level": "ERROR",
+            "level": "INFO",
             "propagate": False,
         },
         "django.security": {
             "handlers": _log_handlers,
             "level": "WARNING",
+            "propagate": False,
+        },
+        "waitress": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "flexoper.request": {
+            "handlers": ["console"],
+            "level": "INFO",
             "propagate": False,
         },
     },
