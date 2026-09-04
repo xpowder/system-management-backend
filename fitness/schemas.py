@@ -351,6 +351,9 @@ class NotificationSettingsIn(BaseModel):
 class NotificationSettingsOut(NotificationSettingsIn):
     id: int
 
+    class Config:
+        from_attributes = True
+
 
 class NotificationOut(BaseModel):
     id: int

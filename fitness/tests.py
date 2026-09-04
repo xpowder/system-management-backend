@@ -469,6 +469,13 @@ class GymNotificationApiTest(TestCase):
         notifications = self.client.get('/api/notifications').json()
         self.assertTrue(any(item['title'] == 'New member registered' for item in notifications))
 
+    def test_notification_settings_serialize_for_staff(self):
+        response = self.client.get('/api/notifications/settings')
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn('id', payload)
+        self.assertIn('membership_expiring_soon', payload)
+
     def test_notification_csrf_is_required_from_the_frontend_origin(self):
         from django.test import Client
         GymNotification.objects.create(recipient=self.admin, category='members', title='Test alert', message='Something happened.')
