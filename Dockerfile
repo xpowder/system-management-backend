@@ -25,4 +25,11 @@ RUN mkdir -p logs media staticfiles \
 
 EXPOSE 8000
 
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -e' \
+    'exec python manage.py createsuperuser "$@"' \
+    > /app/create-superuser.sh \
+    && chmod +x /app/create-superuser.sh
+
 CMD ["sh", "-c", "python manage.py migrate --noinput && exec python manage.py run_production"]

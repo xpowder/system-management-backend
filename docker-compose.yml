@@ -1,3 +1,7 @@
+# Local stack: docker compose up --build
+# Superuser (local Docker): docker compose --profile tools run --rm superuser
+# Superuser (Railway Docker): one-off / SSH → python manage.py createsuperuser
+
 services:
   db:
     image: postgres:16-alpine
@@ -47,6 +51,24 @@ services:
       timeout: 5s
       retries: 12
       start_period: 40s
+
+  superuser:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python manage.py createsuperuser
+    environment:
+      DJANGO_DEBUG: "False"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-docker-local-change-this-secret-key-32}
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,backend
+      DJANGO_HTTPS: "False"
+      DATABASE_URL: postgresql://flexoper:flexoper@db:5432/flexoper
+    depends_on:
+      db:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
 
   frontend:
     build:

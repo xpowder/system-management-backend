@@ -100,8 +100,11 @@ This PC still uses `db.sqlite3` unless you set `DATABASE_URL`. On Railway:
    - `DJANGO_SECRET_KEY` = a long random value (32+ characters)
    - `DJANGO_ALLOWED_HOSTS` = your Railway domain, e.g. `your-app.up.railway.app`
    - `DJANGO_CORS_ORIGINS` = `https://your-app.up.railway.app`
-3. Railway sets `PORT` and `RAILWAY_PUBLIC_DOMAIN` itself. The start command is in `Procfile` (`migrate` then Waitress).
-4. After the first deploy, create a staff user: `railway run python manage.py createsuperuser`
+3. Railway sets `PORT` and `RAILWAY_PUBLIC_DOMAIN` itself. The Docker start command migrates, then Waitress.
+4. Create a staff user **inside the Docker container** (not on this PC):
+   - Railway: Django service → Shell / one-off → `python manage.py createsuperuser`
+   - Or: `python manage.py createsuperuser --noinput` with `DJANGO_SUPERUSER_USERNAME`, `DJANGO_SUPERUSER_EMAIL`, and `DJANGO_SUPERUSER_PASSWORD` set for that job only
+   - Local Compose: `docker compose --profile tools run --rm superuser`
 
 SQLite backup/restore commands do not apply to Railway Postgres. Use Railway’s database backups instead.
 
