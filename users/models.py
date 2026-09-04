@@ -34,6 +34,7 @@ class ClientProfile(BaseModel):
         ordering = ['user__first_name', 'user__last_name']
         verbose_name = 'Client Profile'
         verbose_name_plural = 'Client Profiles'
+        indexes = [models.Index(fields=['is_active'])]
     
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name} (Client)"

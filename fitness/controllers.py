@@ -11,7 +11,7 @@ from ninja.errors import HttpError
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
-from django.db.models import Count, DecimalField, Max, OuterRef, Prefetch, Q, Subquery, Sum, Value
+from django.db.models import Count, DecimalField, F, Max, OuterRef, Prefetch, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from core.auth import gym_staff_auth
@@ -428,8 +428,69 @@ def member_data(member):
     }
 
 
+def _paid_total_annotation():
+    zero = Decimal('0.00')
+    return Coalesce(
+        Sum('payments__amount', filter=Q(payments__status='paid')),
+        Value(zero),
+        output_field=DecimalField(max_digits=12, decimal_places=2),
+    )
+
+
+def _memberships_with_paid_total():
+    return Membership.objects.select_related('member__user', 'plan').annotate(paid_total=_paid_total_annotation())
+
+
+def _membership_paid_total(item):
+    paid = getattr(item, 'paid_total', None)
+    if paid is not None:
+        return paid or Decimal('0.00')
+    cache = getattr(item, '_prefetched_objects_cache', None)
+    if cache and 'payments' in cache:
+        return sum((payment.amount for payment in item.payments.all() if payment.status == 'paid'), Decimal('0.00'))
+    return item.payments.filter(status='paid').aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+
+
 def membership_data(item):
-    return {'id': item.id, 'member_id': item.member_id, 'plan_id': item.plan_id, 'start_date': item.start_date, 'end_date': item.end_date, 'price': item.price, 'status': item.status, 'payment_status': item.payment_status, 'total_paid': item.total_paid, 'remaining_balance': item.remaining_balance, 'notes': item.notes}
+    paid = _membership_paid_total(item)
+    remaining = max(item.price - paid, Decimal('0.00'))
+    if item.payment_status_override:
+        payment_status = item.payment_status_override
+    elif paid >= item.price:
+        payment_status = 'paid'
+    elif paid > 0:
+        payment_status = 'partial'
+    else:
+        payment_status = 'unpaid'
+    return {
+        'id': item.id,
+        'member_id': item.member_id,
+        'plan_id': item.plan_id,
+        'start_date': item.start_date,
+        'end_date': item.end_date,
+        'price': item.price,
+        'status': item.status,
+        'payment_status': payment_status,
+        'total_paid': paid,
+        'remaining_balance': remaining,
+        'notes': item.notes,
+    }
+
+
+def _reminder_membership_qs():
+    """Memberships that need a WhatsApp reminder, with paid_total annotated."""
+    today = timezone.localdate()
+    expired_after = today - timedelta(days=60)
+    expiring_until = today + timedelta(days=7)
+    return (
+        _memberships_with_paid_total()
+        .exclude(status_override__in=('cancelled', 'suspended'))
+        .filter(
+            Q(price__gt=F('paid_total'))
+            | Q(start_date__lte=today, end_date__gte=today, end_date__lte=expiring_until)
+            | Q(end_date__gte=expired_after, end_date__lt=today)
+        )
+    )
 
 
 def payment_data(payment):
@@ -549,23 +610,13 @@ def _reminder_rows():
     today = timezone.localdate()
     expired_after = today - timedelta(days=60)
     zero = Decimal('0.00')
-    memberships = list(
-        Membership.objects.select_related('member__user', 'plan').annotate(
-            paid_total=Coalesce(
-                Sum('payments__amount', filter=Q(payments__status='paid')),
-                Value(zero),
-                output_field=DecimalField(max_digits=12, decimal_places=2),
-            )
-        )
-    )
+    memberships = list(_reminder_membership_qs())
     latest = {
         row['membership_id']: row['sent_at']
         for row in GymWhatsAppReminder.objects.values('membership_id').annotate(sent_at=Max('created_at'))
     }
     items = []
     for item in memberships:
-        if item.status_override in ('cancelled', 'suspended'):
-            continue
         remaining = max(item.price - (item.paid_total or zero), zero)
         reasons = []
         if item.status == 'expiring_soon':
@@ -585,6 +636,12 @@ def _reminder_rows():
         sent_date = None
         if last_sent:
             sent_date = timezone.localtime(last_sent).date() if timezone.is_aware(last_sent) else last_sent.date()
+        if remaining > 0:
+            pay_status = 'partial' if (item.paid_total or zero) > 0 else 'unpaid'
+        else:
+            pay_status = 'paid'
+        if item.payment_status_override:
+            pay_status = item.payment_status_override
         items.append({
             'membership_id': item.id,
             'member_id': item.member_id,
@@ -592,7 +649,7 @@ def _reminder_rows():
             'phone': phone,
             'whatsapp_url': f'https://wa.me/{number}?text={quote(message)}' if number else None,
             'status': item.status,
-            'payment_status': item.payment_status,
+            'payment_status': pay_status,
             'end_date': item.end_date,
             'days_left': days_left,
             'remaining': remaining,
@@ -622,7 +679,7 @@ def gym_dashboard(request):
     paid_totals = memberships.annotate(paid_total=Sum('payments__amount', filter=Q(payments__status='paid'))).values_list('price', 'paid_total')
     outstanding = sum((max(price - (paid or Decimal('0.00')), Decimal('0.00')) for price, paid in paid_totals), Decimal('0.00'))
     recent_members = ClientProfile.objects.select_related('user').order_by('-created_at')[:5]
-    reminder_count = len(_reminder_rows())
+    reminder_count = _reminder_membership_qs().count()
     return {'members': ClientProfile.objects.filter(is_active=True).count(), 'active_members': active, 'expiring_soon': expiring, 'cash_this_month': payments.aggregate(total=Sum('amount'))['total'] or Decimal('0.00'), 'outstanding': outstanding, 'whatsapp_due': reminder_count, 'recent_members': [member_data(item) for item in recent_members]}
 
 
@@ -900,14 +957,21 @@ def delete_plan(request, plan_id: int):
 
 @router.get('/fitness/memberships', response=List[MembershipOut])
 def list_memberships(request, status: Optional[str] = None):
-    queryset = Membership.objects.select_related('member__user', 'plan').prefetch_related('payments').all()
+    queryset = _memberships_with_paid_total()
     items = [item for item in queryset if not status or item.status == status]
     return [membership_data(item) for item in items[:500]]
 
 
 @router.get('/fitness/memberships/expiring', response=List[MembershipOut])
 def expiring_memberships(request):
-    return [membership_data(item) for item in Membership.objects.select_related('member__user', 'plan').all() if item.status == 'expiring_soon']
+    today = timezone.localdate()
+    queryset = _memberships_with_paid_total().filter(
+        status_override='',
+        start_date__lte=today,
+        end_date__gte=today,
+        end_date__lte=today + timedelta(days=7),
+    )
+    return [membership_data(item) for item in queryset]
 
 
 @router.get('/fitness/reminders', response=WhatsAppReminderListOut)

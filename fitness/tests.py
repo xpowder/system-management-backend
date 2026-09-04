@@ -1164,3 +1164,79 @@ class GymCashDeskApiTest(TestCase):
         self.assertTrue(pdf.content.startswith(b'%PDF'))
 
 
+class ThousandMemberQueryTests(TestCase):
+    """Local scale check: 1000 members should not run one SQL query per row."""
+
+    def setUp(self):
+        from datetime import timedelta
+        from decimal import Decimal
+
+        from django.utils import timezone
+
+        from fitness.models import GymPayment, Membership, MembershipPlan
+        from users.models import ClientProfile
+
+        staff = User.objects.create_user(username='scale-staff', password='password123', is_staff=True)
+        self.client.force_login(staff)
+        plan = MembershipPlan.objects.create(name='Scale plan', duration_months=1, price=Decimal('100.00'))
+        today = timezone.localdate()
+        User.objects.bulk_create([
+            User(username=f'scale{i:04d}', first_name='Member', last_name=f'{i:04d}')
+            for i in range(1000)
+        ])
+        users = list(User.objects.filter(username__startswith='scale').exclude(username='scale-staff').order_by('id'))
+        ClientProfile.objects.bulk_create([
+            ClientProfile(
+                user=user,
+                phone='0611223344',
+                address='Rue Atlas',
+                city='Casablanca',
+                id_number=f'SC{i:06d}',
+                is_active=True,
+            )
+            for i, user in enumerate(users)
+        ])
+        profiles = list(ClientProfile.objects.filter(id_number__startswith='SC').order_by('id'))
+        Membership.objects.bulk_create([
+            Membership(
+                member=profile,
+                plan=plan,
+                start_date=today,
+                end_date=today + timedelta(days=30),
+                price=Decimal('100.00'),
+            )
+            for profile in profiles
+        ])
+        memberships = list(Membership.objects.order_by('id'))
+        GymPayment.objects.bulk_create([
+            GymPayment(
+                membership=membership,
+                amount=Decimal('100.00'),
+                status='paid',
+                payment_method='cash',
+                received_by='desk',
+            )
+            for membership in memberships
+        ])
+
+    def test_member_and_membership_lists_stay_constant_query(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        with CaptureQueriesContext(connection) as members_ctx:
+            members = self.client.get('/api/fitness/members')
+        with CaptureQueriesContext(connection) as memberships_ctx:
+            memberships = self.client.get('/api/fitness/memberships')
+        with CaptureQueriesContext(connection) as dash_ctx:
+            dashboard = self.client.get('/api/fitness/dashboard')
+        self.assertEqual(members.status_code, 200)
+        self.assertEqual(len(members.json()), 500)
+        self.assertLessEqual(len(members_ctx.captured_queries), 8)
+        self.assertEqual(memberships.status_code, 200)
+        self.assertEqual(len(memberships.json()), 500)
+        self.assertLessEqual(len(memberships_ctx.captured_queries), 8)
+        self.assertEqual(dashboard.status_code, 200)
+        self.assertEqual(dashboard.json()['members'], 1000)
+        self.assertLessEqual(len(dash_ctx.captured_queries), 16)
+
+

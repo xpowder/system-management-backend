@@ -194,6 +194,10 @@ class GymPayment(BaseModel):
 
     class Meta:
         ordering = ['-received_at']
+        indexes = [
+            models.Index(fields=['membership', 'status']),
+            models.Index(fields=['received_at']),
+        ]
 
 
 class Attendance(BaseModel):
