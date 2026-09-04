@@ -223,6 +223,20 @@ class FrontendOriginTests(TestCase):
             )
         )
 
+    def test_railway_healthcheck_hosts_are_explicit(self):
+        from homezup.origins import railway_runtime_hosts
+
+        hosts = railway_runtime_hosts(
+            "backend-production-88cc.up.railway.app",
+            "backend.railway.internal",
+        )
+        self.assertIn("localhost", hosts)
+        self.assertIn("127.0.0.1", hosts)
+        self.assertIn("healthcheck.railway.app", hosts)
+        self.assertIn("backend-production-88cc.up.railway.app", hosts)
+        self.assertNotIn("*", hosts)
+        self.assertNotIn(".up.railway.app", hosts)
+
 
 class MediaServeTests(TestCase):
     def test_media_path_cannot_escape_the_media_root(self):

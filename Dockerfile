@@ -37,5 +37,6 @@ RUN chmod +x /app/start.sh \
     > /app/create-superuser.sh \
     && chmod +x /app/create-superuser.sh
 
-# Default process is start.sh. Railway startCommand must invoke this same file.
-ENTRYPOINT ["/bin/sh", "/app/start.sh"]
+# No ENTRYPOINT. Railway startCommand replaces CMD; combining both
+# prepends start.sh arguments and can skip Gunicorn.
+CMD ["/bin/sh", "/app/start.sh"]

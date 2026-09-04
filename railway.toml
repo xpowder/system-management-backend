@@ -3,9 +3,8 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# Docker images need a shell so $PORT expands inside start.sh.
-# Form required by Railway: /bin/sh -c "..."
-# This also overrides a dashboard Start Command such as createsuperuser.
+# Must match Docker CMD. /bin/sh -c is required for Dockerfile services.
+# Do not set a dashboard Start Command (createsuperuser / migrate-only).
 startCommand = "/bin/sh -c 'exec /app/start.sh'"
 healthcheckPath = "/healthz"
 healthcheckTimeout = 300

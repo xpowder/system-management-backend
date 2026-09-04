@@ -61,4 +61,6 @@ def gunicorn_argv():
         "-",
         "--error-logfile",
         "-",
+        "--log-level",
+        "info",
     ]

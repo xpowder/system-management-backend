@@ -17,6 +17,27 @@ def merge_frontend_origin(allowed_hosts, cors_origins, frontend_origin):
     return hosts, cors
 
 
+def railway_runtime_hosts(public_domain="", private_domain=""):
+    """Explicit hosts Railway uses for the public URL and in-container healthchecks.
+
+    Do not use '*' or leading-dot wildcards. Railway healthchecks often send
+    Host: localhost or 127.0.0.1; omitting those makes /healthz return 400
+    and the platform shows 'Application failed to respond'.
+    """
+    hosts = []
+    for host in (
+        (public_domain or "").strip(),
+        (private_domain or "").strip(),
+        "localhost",
+        "127.0.0.1",
+        "healthcheck.railway.app",
+        "backend-production-88cc.up.railway.app",
+    ):
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts
+
+
 def uses_cross_site_cookies(frontend_origin, public_domain=""):
     """True when the browser UI and API are on different hosts."""
     frontend_host = urlparse((frontend_origin or "").strip()).hostname or ""

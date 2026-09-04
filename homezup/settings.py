@@ -18,7 +18,7 @@ from django.core.exceptions import ImproperlyConfigured
 
 from homezup.checks import DEV_SECRET, production_misconfigurations
 from homezup.database import build_databases
-from homezup.origins import merge_frontend_origin, uses_cross_site_cookies
+from homezup.origins import merge_frontend_origin, railway_runtime_hosts, uses_cross_site_cookies
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -38,14 +38,11 @@ ALLOWED_HOSTS = list(
     )
 )
 if ON_RAILWAY:
-    for _host in (
+    for _host in railway_runtime_hosts(
         config("RAILWAY_PUBLIC_DOMAIN", default=""),
         config("RAILWAY_PRIVATE_DOMAIN", default=""),
-        ".up.railway.app",
-        ".railway.internal",
-        "backend-production-88cc.up.railway.app",
     ):
-        if _host and _host not in ALLOWED_HOSTS:
+        if _host not in ALLOWED_HOSTS:
             ALLOWED_HOSTS.append(_host)
 
 FRONTEND_ORIGIN = config(
