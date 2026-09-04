@@ -1,4 +1,11 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
 [deploy]
+# Overrides a dashboard Start Command (e.g. createsuperuser) that would
+# never bind $PORT and would make Railway return 502.
+startCommand = "/app/start.sh"
 healthcheckPath = "/healthz"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
