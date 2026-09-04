@@ -13,10 +13,23 @@ from homezup.origins import merge_frontend_origin, uses_cross_site_cookies
 class SpaAndDeliveryTests(TestCase):
     def test_unbuilt_frontend_returns_503(self):
         with TemporaryDirectory() as folder:
-            with override_settings(FRONTEND_DIST=Path(folder)):
+            with override_settings(FRONTEND_DIST=Path(folder), FRONTEND_ORIGIN=""):
                 response = self.client.get("/")
                 self.assertEqual(response.status_code, 503)
                 self.assertIn(b"not built", response.content)
+
+    def test_unbuilt_frontend_redirects_to_the_production_ui(self):
+        with TemporaryDirectory() as folder:
+            with override_settings(
+                FRONTEND_DIST=Path(folder),
+                FRONTEND_ORIGIN="https://system-management-production-5616.up.railway.app",
+            ):
+                response = self.client.get("/")
+                self.assertEqual(response.status_code, 302)
+                self.assertEqual(
+                    response["Location"],
+                    "https://system-management-production-5616.up.railway.app",
+                )
 
     def test_api_is_not_swallowed_by_the_spa(self):
         response = self.client.get("/api/auth/me")
@@ -27,6 +40,10 @@ class SpaAndDeliveryTests(TestCase):
         response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content, b"ok")
+
+    def test_api_docs_are_public(self):
+        response = self.client.get("/api/docs")
+        self.assertEqual(response.status_code, 200)
 
     def test_check_delivery_passes_with_a_staff_user(self):
         User = get_user_model()

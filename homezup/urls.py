@@ -1,7 +1,6 @@
 """
 URL configuration for homezup project.
 """
-from django.conf import settings
 from django.contrib import admin
 from django.urls import path, re_path
 from ninja_extra import NinjaExtraAPI
@@ -20,11 +19,11 @@ from fitness.controllers import router as fitness_router
 from users.controllers import router as users_router
 
 api = NinjaExtraAPI(
-    title="Homezup Booking API",
-    description="Local booking management system API",
+    title="FlexOper API",
+    description="Gym desk API for members, memberships, payments, and attendance.",
     version="1.0.0",
-    docs_url="/docs" if settings.DEBUG else None,
-    openapi_url="/openapi.json" if settings.DEBUG else None,
+    docs_url="/docs",
+    openapi_url="/openapi.json",
 )
 
 

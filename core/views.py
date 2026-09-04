@@ -2,6 +2,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.http import FileResponse, Http404, HttpResponse
+from django.shortcuts import redirect
 
 
 def _safe_dist_file(relative: str) -> Path:
@@ -20,15 +21,18 @@ def healthz(request):
 
 def spa_index(request, rest=""):
     index = Path(settings.FRONTEND_DIST) / "index.html"
-    if not index.is_file():
-        return HttpResponse(
-            "FlexOper frontend is not built yet.\n\n"
-            "Daily use: open http://localhost:5173 after npm run dev.\n"
-            "One-port delivery: cd frontend && npm run build, then refresh this page.\n",
-            status=503,
-            content_type="text/plain; charset=utf-8",
-        )
-    return FileResponse(index.open("rb"), content_type="text/html")
+    if index.is_file():
+        return FileResponse(index.open("rb"), content_type="text/html")
+    origin = (getattr(settings, "FRONTEND_ORIGIN", "") or "").rstrip("/")
+    if origin:
+        return redirect(origin)
+    return HttpResponse(
+        "FlexOper frontend is not built yet.\n\n"
+        "Daily use: open http://localhost:5173 after npm run dev.\n"
+        "One-port delivery: cd frontend && npm run build, then refresh this page.\n",
+        status=503,
+        content_type="text/plain; charset=utf-8",
+    )
 
 
 def frontend_asset(request, path):
