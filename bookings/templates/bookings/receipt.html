@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>HOMEZUP receipt {{ receipt_number }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 32px; color: #222; }
+    h1 { margin-bottom: 4px; }
+    .muted { color: #666; margin-bottom: 24px; }
+    table { border-collapse: collapse; width: 100%; max-width: 640px; }
+    th, td { text-align: left; padding: 8px 4px; border-bottom: 1px solid #ddd; }
+    @media print { button { display: none; } }
+  </style>
+</head>
+<body>
+  <button onclick="window.print()">Print</button>
+  <h1>HOMEZUP</h1>
+  <p class="muted">Cash receipt</p>
+  <table>
+    <tr><th>Receipt</th><td>{{ receipt_number }}</td></tr>
+    <tr><th>Booking ID</th><td>{{ booking_id }}</td></tr>
+    <tr><th>Client</th><td>{{ client }}</td></tr>
+    <tr><th>Property</th><td>{{ property }}</td></tr>
+    <tr><th>Provider</th><td>{{ provider }}</td></tr>
+    <tr><th>Payment date</th><td>{{ payment_date }}</td></tr>
+    <tr><th>Amount paid</th><td>{{ amount_paid }} {{ currency }}</td></tr>
+    <tr><th>Payment method</th><td>{{ payment_method }}</td></tr>
+    <tr><th>Total booking price</th><td>{{ total_booking_price }} {{ currency }}</td></tr>
+    <tr><th>Total paid</th><td>{{ total_paid }} {{ currency }}</td></tr>
+    <tr><th>Remaining balance</th><td>{{ remaining_balance }} {{ currency }}</td></tr>
+    <tr><th>Received by</th><td>{{ received_by }}</td></tr>
+  </table>
+</body>
+</html>

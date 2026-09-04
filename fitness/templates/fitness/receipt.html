@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ company }} cash receipt</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 32px; color: #172126; }
+    h1 { margin: 0 0 4px; letter-spacing: 1px; }
+    .muted { color: #4A6057; margin: 0 0 24px; }
+    table { border-collapse: collapse; width: 100%; max-width: 640px; }
+    th, td { text-align: left; padding: 8px 4px; border-bottom: 1px solid #D6DDD8; }
+    th { width: 180px; color: #4A6057; font-weight: 600; }
+    .actions { margin-bottom: 20px; }
+    button {
+      font: 14px Arial, sans-serif;
+      padding: 8px 14px;
+      background: #ef735c;
+      color: white;
+      border: 0;
+      cursor: pointer;
+    }
+    @media print { .actions { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="actions">
+    <button type="button" onclick="window.print()">Print</button>
+  </div>
+  <h1>{{ company }}</h1>
+  <p class="muted">Cash receipt</p>
+  <table>
+    <tr><th>First name</th><td>{{ first_name }}</td></tr>
+    <tr><th>Last name</th><td>{{ last_name }}</td></tr>
+    <tr><th>Class</th><td>{{ class_name }}</td></tr>
+    <tr><th>Date</th><td>{{ payment_date }}</td></tr>
+    <tr><th>Time</th><td>{{ payment_time }}</td></tr>
+    <tr><th>Amount paid</th><td>{{ amount_paid }} {{ currency }}</td></tr>
+    <tr><th>Received by</th><td>{{ received_by }}</td></tr>
+  </table>
+</body>
+</html>

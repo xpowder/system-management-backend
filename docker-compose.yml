@@ -1,0 +1,66 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: flexoper
+      POSTGRES_USER: flexoper
+      POSTGRES_PASSWORD: flexoper
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flexoper -d flexoper"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "5432:5432"
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      PORT: "8000"
+      DJANGO_DEBUG: "False"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-docker-local-change-this-secret-key-32}
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,backend,frontend
+      DJANGO_CORS_ORIGINS: http://localhost,http://localhost:8080,http://127.0.0.1,http://127.0.0.1:8080,http://localhost:8000
+      DJANGO_HTTPS: "False"
+      DATABASE_URL: postgresql://flexoper:flexoper@db:5432/flexoper
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - backend_media:/app/media
+      - backend_static:/app/staticfiles
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; s=socket.create_connection(('127.0.0.1', 8000), 2); s.close()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+
+volumes:
+  postgres_data:
+  backend_media:
+  backend_static:

@@ -1,0 +1,170 @@
+from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from django.contrib.auth import get_user_model
+from django.core.management import call_command
+from django.test import TestCase, override_settings
+
+from homezup.checks import DEV_SECRET, production_misconfigurations
+
+
+class SpaAndDeliveryTests(TestCase):
+    def test_unbuilt_frontend_returns_503(self):
+        with TemporaryDirectory() as folder:
+            with override_settings(FRONTEND_DIST=Path(folder)):
+                response = self.client.get("/")
+                self.assertEqual(response.status_code, 503)
+                self.assertIn(b"not built", response.content)
+
+    def test_api_is_not_swallowed_by_the_spa(self):
+        response = self.client.get("/api/auth/me")
+        self.assertNotEqual(response.status_code, 503)
+        self.assertIn(response.status_code, (200, 401, 403))
+
+    def test_check_delivery_passes_with_a_staff_user(self):
+        User = get_user_model()
+        User.objects.create_superuser(username="desk", email="desk@gym.local", password="pass-word")
+        out = StringIO()
+        err = StringIO()
+        call_command("check_delivery", stdout=out, stderr=err)
+        self.assertIn("passed", out.getvalue().lower())
+
+
+class DatabaseSettingsTests(TestCase):
+    def test_local_defaults_to_sqlite(self):
+        from homezup.database import build_databases
+
+        databases = build_databases(Path("."), testing=False)
+        self.assertIn("sqlite3", databases["default"]["ENGINE"])
+
+    def test_tests_stay_on_sqlite_even_with_a_postgres_url(self):
+        from homezup.database import build_databases
+
+        databases = build_databases(
+            Path("."),
+            testing=True,
+            database_url="postgres://user:pass@postgres.railway.internal:5432/railway",
+        )
+        self.assertIn("sqlite3", databases["default"]["ENGINE"])
+
+    def test_database_url_uses_postgres(self):
+        from homezup.database import build_databases
+
+        databases = build_databases(
+            Path("."),
+            testing=False,
+            on_railway=True,
+            database_url="postgres://user:pass@postgres.railway.internal:5432/railway",
+        )
+        db = databases["default"]
+        self.assertIn("postgresql", db["ENGINE"])
+        self.assertEqual(db["NAME"], "railway")
+        self.assertEqual(db["HOST"], "postgres.railway.internal")
+        self.assertNotEqual(db.get("OPTIONS", {}).get("sslmode"), "require")
+
+    def test_local_prefers_public_url_over_internal(self):
+        from homezup.database import build_databases
+
+        databases = build_databases(
+            Path("."),
+            testing=False,
+            on_railway=False,
+            database_url="postgres://user:pass@postgres.railway.internal:5432/railway",
+            public_url="postgresql://user:pass@switchback.proxy.rlwy.net:12345/railway",
+        )
+        self.assertEqual(databases["default"]["HOST"], "switchback.proxy.rlwy.net")
+
+    def test_local_internal_url_raises(self):
+        from django.core.exceptions import ImproperlyConfigured
+
+        from homezup.database import build_databases
+
+        with self.assertRaises(ImproperlyConfigured):
+            build_databases(
+                Path("."),
+                testing=False,
+                on_railway=False,
+                database_url="postgres://user:pass@postgres.railway.internal:5432/railway",
+            )
+
+    def test_public_railway_url_requires_ssl(self):
+        from homezup.database import build_databases
+
+        databases = build_databases(
+            Path("."),
+            testing=False,
+            database_url="postgresql://user:pass@switchback.proxy.rlwy.net:12345/railway",
+        )
+        self.assertEqual(databases["default"].get("OPTIONS", {}).get("sslmode"), "require")
+
+    def test_docker_compose_postgres_does_not_require_ssl(self):
+        from homezup.database import build_databases
+
+        databases = build_databases(
+            Path("."),
+            testing=False,
+            database_url="postgresql://flexoper:flexoper@db:5432/flexoper",
+        )
+        self.assertNotEqual(databases["default"].get("OPTIONS", {}).get("sslmode"), "require")
+
+    def test_pg_host_vars_use_postgres(self):
+        from homezup.database import build_databases
+
+        databases = build_databases(
+            Path("."),
+            testing=False,
+            on_railway=True,
+            pg_name="railway",
+            pg_user="postgres",
+            pg_password="secret",
+            pg_host="postgres.railway.internal",
+            pg_port="5432",
+        )
+        db = databases["default"]
+        self.assertIn("postgresql", db["ENGINE"])
+        self.assertEqual(db["NAME"], "railway")
+        self.assertEqual(db["USER"], "postgres")
+
+
+class ProductionSettingsTests(TestCase):
+    def test_production_rejects_the_development_secret(self):
+        errors = production_misconfigurations(
+            debug=False,
+            secret_key=DEV_SECRET,
+            allowed_hosts=["example.com"],
+        )
+        self.assertTrue(errors)
+
+    def test_production_accepts_a_strong_secret(self):
+        errors = production_misconfigurations(
+            debug=False,
+            secret_key="x" * 50,
+            allowed_hosts=["example.com"],
+        )
+        self.assertEqual(errors, [])
+
+    def test_debug_mode_allows_the_development_secret(self):
+        errors = production_misconfigurations(
+            debug=True,
+            secret_key=DEV_SECRET,
+            allowed_hosts=["localhost"],
+        )
+        self.assertEqual(errors, [])
+
+
+class MediaServeTests(TestCase):
+    def test_media_path_cannot_escape_the_media_root(self):
+        response = self.client.get("/media/../homezup/settings.py")
+        self.assertEqual(response.status_code, 404)
+
+    def test_media_serves_a_file_inside_media_root(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "note.txt"
+            path.write_text("ok", encoding="utf-8")
+            with override_settings(MEDIA_ROOT=Path(folder)):
+                response = self.client.get("/media/note.txt")
+                self.assertEqual(response.status_code, 200)
+                body = b"".join(response.streaming_content)
+                response.close()
+                self.assertEqual(body, b"ok")
