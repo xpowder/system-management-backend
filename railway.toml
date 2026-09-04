@@ -3,9 +3,10 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# Same script as Dockerfile CMD. /bin/sh expands $PORT inside start.sh.
-# Do not replace this with migrate-only or createsuperuser.
-startCommand = "/bin/sh /app/start.sh"
+# Docker images need a shell so $PORT expands inside start.sh.
+# Form required by Railway: /bin/sh -c "..."
+# This also overrides a dashboard Start Command such as createsuperuser.
+startCommand = "/bin/sh -c 'exec /app/start.sh'"
 healthcheckPath = "/healthz"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"

@@ -23,18 +23,8 @@ RUN mkdir -p logs media staticfiles \
        python manage.py collectstatic --noinput
 
 # LF-only scripts so a Windows checkout cannot break the Linux container.
-RUN printf '%s\n' \
-    '#!/bin/sh' \
-    'set -e' \
-    'if [ -z "$PORT" ]; then' \
-    '  echo "ERROR: PORT is not set. Railway injects PORT. Delete any custom PORT variable." >&2' \
-    '  exit 1' \
-    'fi' \
-    'echo "Starting homezup.wsgi:application on 0.0.0.0:$PORT"' \
-    'python manage.py migrate --noinput' \
-    'echo "Migrations done. Starting Gunicorn."' \
-    'exec python -m gunicorn homezup.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 120 --access-logfile - --error-logfile -' \
-    > /app/start.sh \
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh \
     && printf '%s\n' \
     '#!/bin/sh' \
     'set -e' \
@@ -45,6 +35,7 @@ RUN printf '%s\n' \
     'fi' \
     'exec python manage.py createsuperuser "$@"' \
     > /app/create-superuser.sh \
-    && chmod +x /app/start.sh /app/create-superuser.sh
+    && chmod +x /app/create-superuser.sh
 
-CMD ["/bin/sh", "/app/start.sh"]
+# Default process is start.sh. Railway startCommand must invoke this same file.
+ENTRYPOINT ["/bin/sh", "/app/start.sh"]
