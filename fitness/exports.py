@@ -17,7 +17,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 CURRENCY = 'MAD'
-COMPANY = 'FlexOper'
+COMPANY = 'AUMB'
 
 
 def _num(value):
@@ -29,7 +29,7 @@ def _money_text(value):
 
 
 def _filename(year, month, extension):
-    return f'flexoper-monthly-report-{year}-{month:02d}.{extension}'
+    return f'AUMB-monthly-report-{year}-{month:02d}.{extension}'
 
 
 def _file_response(payload, content_type, filename):
@@ -427,7 +427,7 @@ def monthly_pdf_response(overview, income, trainers):
 
 
 def _cash_filename(year, month, extension):
-    return f'flexoper-cash-log-{year}-{month:02d}.{extension}'
+    return f'AUMB-cash-log-{year}-{month:02d}.{extension}'
 
 
 def build_cash_log_xlsx(year, month, label, rows, total):

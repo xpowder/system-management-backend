@@ -15,7 +15,7 @@ def receipt_context(payment: BookingPayment) -> dict:
     client = booking.client.user
     provider = booking.provider
     return {
-        "company": "HOMEZUP",
+        "company": "AUMB",
         "booking_id": booking.id,
         "client": f"{client.first_name} {client.last_name}".strip() or client.username,
         "property": booking.property_ref.name,
@@ -52,7 +52,7 @@ def receipt_pdf_response(payment: BookingPayment) -> HttpResponse:
     y = height - 25 * mm
 
     pdf.setFont("Helvetica-Bold", 18)
-    pdf.drawString(25 * mm, y, "HOMEZUP")
+    pdf.drawString(25 * mm, y, "AUMB")
     y -= 10 * mm
     pdf.setFont("Helvetica", 11)
     pdf.drawString(25 * mm, y, "Cash receipt")
@@ -81,6 +81,6 @@ def receipt_pdf_response(payment: BookingPayment) -> HttpResponse:
     buffer.seek(0)
     response = HttpResponse(buffer.read(), content_type="application/pdf")
     response["Content-Disposition"] = (
-        f'inline; filename="homezup-receipt-{payment.receipt_number}.pdf"'
+        f'inline; filename="AUMB-receipt-{payment.receipt_number}.pdf"'
     )
     return response

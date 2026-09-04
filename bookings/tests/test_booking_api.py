@@ -93,7 +93,7 @@ class BookingApiFlowTest(TestCase):
             f"/api/bookings/{booking_id}/payments/{payment_id}/receipt.html"
         )
         self.assertEqual(html.status_code, 200)
-        self.assertIn(b"HOMEZUP", html.content)
+        self.assertIn(b"AUMB", html.content)
 
         dashboard = self.client.get("/api/dashboard")
         self.assertEqual(dashboard.status_code, 200)

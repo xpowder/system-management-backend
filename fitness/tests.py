@@ -812,10 +812,11 @@ class MonthlyReportExportTest(TestCase):
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         )
         self.assertIn(
-            f'flexoper-monthly-report-{self.today.year}-{self.today.month:02d}.xlsx',
+            f'AUMB-monthly-report-{self.today.year}-{self.today.month:02d}.xlsx',
             response['Content-Disposition'],
         )
         workbook = load_workbook(BytesIO(response.content))
+        self.assertEqual(workbook['Summary']['A1'].value, 'AUMB')
         self.assertEqual(workbook.sheetnames, ['Summary', 'Income', 'Bills', 'Trainer pay'])
         amounts = {
             workbook['Summary'].cell(row, 1).value: workbook['Summary'].cell(row, 2).value
@@ -837,7 +838,7 @@ class MonthlyReportExportTest(TestCase):
         self.assertEqual(response['Content-Type'], 'application/pdf')
         self.assertTrue(response.content.startswith(b'%PDF'))
         self.assertIn(
-            f'flexoper-monthly-report-{self.today.year}-{self.today.month:02d}.pdf',
+            f'AUMB-monthly-report-{self.today.year}-{self.today.month:02d}.pdf',
             response['Content-Disposition'],
         )
 
@@ -1152,7 +1153,7 @@ class GymCashDeskApiTest(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertIn(
-            f'flexoper-cash-log-{self.today.year}-{self.today.month:02d}.xlsx',
+            f'AUMB-cash-log-{self.today.year}-{self.today.month:02d}.xlsx',
             response['Content-Disposition'],
         )
         workbook = load_workbook(BytesIO(response.content))

@@ -80,6 +80,6 @@ def receipt_pdf_response(payment) -> HttpResponse:
     buffer.seek(0)
     response = HttpResponse(buffer.read(), content_type='application/pdf')
     response['Content-Disposition'] = content_disposition_header(
-        True, f"flexoper-receipt-{data['receipt_number']}.pdf"
+        True, f"AUMB-receipt-{data['receipt_number']}.pdf"
     )
     return response

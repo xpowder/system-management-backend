@@ -40,7 +40,7 @@ def export_bookings_csv(queryset=None) -> HttpResponse:
         for booking in queryset
     ]
     return _csv_response(
-        "homezup-bookings.csv",
+        "AUMB-bookings.csv",
         [
             "booking_id",
             "client",
@@ -73,7 +73,7 @@ def export_payments_csv() -> HttpResponse:
         for payment in BookingPayment.objects.select_related("booking")
     ]
     return _csv_response(
-        "homezup-payments.csv",
+        "AUMB-payments.csv",
         [
             "payment_id",
             "booking_id",
@@ -101,7 +101,7 @@ def export_outstanding_csv() -> HttpResponse:
         for booking in get_outstanding_payments()
     ]
     return _csv_response(
-        "homezup-outstanding.csv",
+        "AUMB-outstanding.csv",
         [
             "booking_id",
             "client",
@@ -118,7 +118,7 @@ def export_outstanding_csv() -> HttpResponse:
 def export_revenue_csv(year: int, month: int) -> HttpResponse:
     cash = get_monthly_revenue(year, month)
     return _csv_response(
-        f"homezup-revenue-{year}-{month:02d}.csv",
+        f"AUMB-revenue-{year}-{month:02d}.csv",
         ["year", "month", "cash_collected", "currency"],
         [[year, month, cash, "MAD"]],
     )

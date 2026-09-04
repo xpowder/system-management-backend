@@ -136,7 +136,7 @@ class AvailabilityOut(Schema):
 
 
 class ReceiptOut(Schema):
-    company: str = "HOMEZUP"
+    company: str = "AUMB"
     booking_id: int
     client: str
     property: str
