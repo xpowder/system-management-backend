@@ -1,11 +1,19 @@
 """
 URL configuration for homezup project.
 """
+from django.conf import settings
 from django.contrib import admin
 from django.urls import path, re_path
 from ninja_extra import NinjaExtraAPI
 
-from core.views import frontend_asset, frontend_root_file, healthz, media_file, spa_index
+from core.views import (
+    api_home,
+    frontend_asset,
+    frontend_root_file,
+    healthz,
+    media_file,
+    spa_index,
+)
 
 from bookings.controllers import (
     AuthController,
@@ -47,11 +55,15 @@ api.add_router("", users_router)
 api.add_router("", fitness_router)
 
 urlpatterns = [
+    path("", api_home),
     path("healthz", healthz),
     path("admin/", admin.site.urls),
     path("api/", api.urls),
     path("media/<path:path>", media_file),
-    path("assets/<path:path>", frontend_asset),
-    path("favicon.svg", frontend_root_file, {"filename": "favicon.svg"}),
-    re_path(r"^(?!api/|admin/|static/|media/|healthz).*$", spa_index),
 ]
+if getattr(settings, "SERVE_FRONTEND", False):
+    urlpatterns += [
+        path("assets/<path:path>", frontend_asset),
+        path("favicon.svg", frontend_root_file, {"filename": "favicon.svg"}),
+        re_path(r"^(?!api/|admin/|static/|media/|healthz).*$", spa_index),
+    ]

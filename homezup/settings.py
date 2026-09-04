@@ -311,8 +311,9 @@ LOGGING = {
     },
 }
 
-# Built React app (npm run build). Django can serve this on port 8000.
+# This backend is API-only. Set DJANGO_SERVE_FRONTEND=True to serve a built React app.
 FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
+SERVE_FRONTEND = config("DJANGO_SERVE_FRONTEND", default=False, cast=bool)
 
 # REST Framework Configuration
 REST_FRAMEWORK = {

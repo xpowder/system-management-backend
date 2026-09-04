@@ -19,6 +19,10 @@ def healthz(request):
     return HttpResponse("ok", content_type="text/plain; charset=utf-8")
 
 
+def api_home(request):
+    return redirect("/api/docs")
+
+
 def spa_index(request, rest=""):
     index = Path(settings.FRONTEND_DIST) / "index.html"
     if index.is_file():
