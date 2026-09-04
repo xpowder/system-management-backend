@@ -10,6 +10,6 @@ django-cors-headers==4.9.0
 django-filter==26.1
 djangorestframework==3.18.0
 whitenoise==6.9.0
-waitress==3.0.2
+gunicorn==23.0.0
 dj-database-url==3.0.1
 psycopg[binary]==3.2.9

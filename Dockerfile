@@ -1,8 +1,7 @@
 FROM python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    DJANGO_LISTEN=0.0.0.0:8000
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
@@ -23,15 +22,17 @@ RUN mkdir -p logs media staticfiles \
        DJANGO_ALLOWED_HOSTS=localhost \
        python manage.py collectstatic --noinput
 
-EXPOSE 8000
-
 # LF-only scripts so a Windows checkout cannot break the Linux container.
 RUN printf '%s\n' \
     '#!/bin/sh' \
     'set -e' \
-    'echo "FlexOper API starting. PORT=${PORT:-8000}"' \
+    'if [ -z "$PORT" ]; then' \
+    '  echo "ERROR: PORT is not set. Railway injects PORT. Delete any custom PORT variable." >&2' \
+    '  exit 1' \
+    'fi' \
+    'echo "Starting homezup.wsgi:application on 0.0.0.0:$PORT"' \
     'python manage.py migrate --noinput' \
-    'echo "Migrations done. Starting Waitress."' \
+    'echo "Migrations done. Starting Gunicorn."' \
     'exec python manage.py run_production' \
     > /app/start.sh \
     && printf '%s\n' \
@@ -39,7 +40,6 @@ RUN printf '%s\n' \
     'set -e' \
     'if [ ! -t 0 ]; then' \
     '  echo "ERROR: createsuperuser is not the web start command." >&2' \
-    '  echo "Clear Railway Settings → Deploy → Custom Start Command, then redeploy." >&2' \
     '  echo "Create a user from Railway Shell: python manage.py createsuperuser" >&2' \
     '  exit 1' \
     'fi' \
@@ -47,4 +47,4 @@ RUN printf '%s\n' \
     > /app/create-superuser.sh \
     && chmod +x /app/start.sh /app/create-superuser.sh
 
-CMD ["/app/start.sh"]
+CMD ["/bin/sh", "/app/start.sh"]

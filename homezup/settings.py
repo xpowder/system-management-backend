@@ -43,6 +43,7 @@ if ON_RAILWAY:
         config("RAILWAY_PRIVATE_DOMAIN", default=""),
         ".up.railway.app",
         ".railway.internal",
+        "backend-production-88cc.up.railway.app",
     ):
         if _host and _host not in ALLOWED_HOSTS:
             ALLOWED_HOSTS.append(_host)
@@ -298,7 +299,12 @@ LOGGING = {
             "level": "WARNING",
             "propagate": False,
         },
-        "waitress": {
+        "gunicorn": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "gunicorn.error": {
             "handlers": ["console"],
             "level": "INFO",
             "propagate": False,

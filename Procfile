@@ -1,1 +1,1 @@
-web: python manage.py migrate --noinput && python manage.py run_production
+web: python manage.py migrate --noinput && gunicorn homezup.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 120 --access-logfile - --error-logfile -

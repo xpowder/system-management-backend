@@ -74,6 +74,7 @@ class DatabaseSettingsTests(TestCase):
         self.assertEqual(db["NAME"], "railway")
         self.assertEqual(db["HOST"], "postgres.railway.internal")
         self.assertNotEqual(db.get("OPTIONS", {}).get("sslmode"), "require")
+        self.assertEqual(db.get("CONN_MAX_AGE"), 0)
 
     def test_local_prefers_public_url_over_internal(self):
         from homezup.database import build_databases
@@ -137,6 +138,32 @@ class DatabaseSettingsTests(TestCase):
         self.assertIn("postgresql", db["ENGINE"])
         self.assertEqual(db["NAME"], "railway")
         self.assertEqual(db["USER"], "postgres")
+        self.assertEqual(db.get("CONN_MAX_AGE"), 0)
+
+
+class BindTests(TestCase):
+    def test_railway_binds_port_from_the_environment(self):
+        from unittest.mock import patch
+
+        from homezup.bind import gunicorn_argv, wsgi_bind_host_port
+
+        env = {"RAILWAY_ENVIRONMENT": "production", "PORT": "4123"}
+        with patch.dict("os.environ", env, clear=False):
+            self.assertEqual(wsgi_bind_host_port(), ("0.0.0.0", 4123))
+            argv = gunicorn_argv()
+        self.assertEqual(argv[1], "homezup.wsgi:application")
+        self.assertEqual(argv[argv.index("--bind") + 1], "0.0.0.0:4123")
+        self.assertNotIn("8000", argv)
+        self.assertNotIn("8080", argv)
+
+    def test_railway_refuses_to_start_without_port(self):
+        from unittest.mock import patch
+
+        from homezup.bind import MissingPort, wsgi_bind_host_port
+
+        with patch.dict("os.environ", {"RAILWAY_ENVIRONMENT": "production"}, clear=True):
+            with self.assertRaises(MissingPort):
+                wsgi_bind_host_port()
 
 
 class ProductionSettingsTests(TestCase):

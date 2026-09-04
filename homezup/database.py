@@ -61,9 +61,11 @@ def postgres_database_from_url(database_url: str) -> dict:
     import dj_database_url
 
     use_ssl = _needs_ssl(database_url)
+    # Persistent connections (CONN_MAX_AGE=600) plus workers/threads exhaust
+    # Railway Postgres ("too many clients already"). Close after each request.
     config = dj_database_url.parse(
         database_url,
-        conn_max_age=0 if use_ssl else 600,
+        conn_max_age=0,
         conn_health_checks=True,
         ssl_require=use_ssl,
     )
@@ -104,7 +106,7 @@ def postgres_database_from_parts(*, name, user, password, host, port) -> dict:
         "PASSWORD": password,
         "HOST": host,
         "PORT": str(port or "5432"),
-        "CONN_MAX_AGE": 0 if sslmode == "require" else 600,
+        "CONN_MAX_AGE": 0,
         "CONN_HEALTH_CHECKS": True,
         "OPTIONS": options,
     }
