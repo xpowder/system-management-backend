@@ -1,5 +1,6 @@
 """Production HTTP bind address. Railway injects PORT; never hardcode it."""
 import os
+import sys
 
 
 class MissingPort(RuntimeError):
@@ -32,10 +33,16 @@ def wsgi_bind_host_port():
 
 
 def gunicorn_argv():
-    """Gunicorn CLI for homezup.wsgi, bound to 0.0.0.0:$PORT on Railway."""
+    """Gunicorn CLI for homezup.wsgi, bound to 0.0.0.0:$PORT on Railway.
+
+    Uses `python -m gunicorn` so startup does not depend on a `gunicorn`
+    binary being on PATH after `python manage.py migrate`.
+    """
     host, port = wsgi_bind_host_port()
     workers = (os.environ.get("WEB_CONCURRENCY") or "2").strip() or "2"
     return [
+        sys.executable,
+        "-m",
         "gunicorn",
         "homezup.wsgi:application",
         "--bind",
@@ -54,5 +61,4 @@ def gunicorn_argv():
         "-",
         "--error-logfile",
         "-",
-        "--capture-output",
     ]

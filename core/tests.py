@@ -151,10 +151,17 @@ class BindTests(TestCase):
         with patch.dict("os.environ", env, clear=False):
             self.assertEqual(wsgi_bind_host_port(), ("0.0.0.0", 4123))
             argv = gunicorn_argv()
-        self.assertEqual(argv[1], "homezup.wsgi:application")
+        self.assertIn("-m", argv)
+        self.assertIn("gunicorn", argv)
+        self.assertIn("homezup.wsgi:application", argv)
         self.assertEqual(argv[argv.index("--bind") + 1], "0.0.0.0:4123")
-        self.assertNotIn("8000", argv)
-        self.assertNotIn("8080", argv)
+        bind = argv[argv.index("--bind") + 1]
+        self.assertTrue(bind.startswith("0.0.0.0:"))
+        self.assertNotIn("127.0.0.1", bind)
+        self.assertNotIn("localhost", bind)
+        self.assertNotEqual(bind, "0.0.0.0:8000")
+        self.assertNotEqual(bind, "0.0.0.0:8080")
+        self.assertNotEqual(bind, "0.0.0.0:3000")
 
     def test_railway_refuses_to_start_without_port(self):
         from unittest.mock import patch

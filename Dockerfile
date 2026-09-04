@@ -33,7 +33,7 @@ RUN printf '%s\n' \
     'echo "Starting homezup.wsgi:application on 0.0.0.0:$PORT"' \
     'python manage.py migrate --noinput' \
     'echo "Migrations done. Starting Gunicorn."' \
-    'exec python manage.py run_production' \
+    'exec python -m gunicorn homezup.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 120 --access-logfile - --error-logfile -' \
     > /app/start.sh \
     && printf '%s\n' \
     '#!/bin/sh' \
