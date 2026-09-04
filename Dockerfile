@@ -21,4 +21,4 @@ RUN mkdir -p logs media staticfiles
 
 EXPOSE 8000
 
-CMD python manage.py migrate --noinput && python manage.py collectstatic --noinput && python manage.py run_production
+CMD ["sh", "-c", "python manage.py migrate --noinput && python manage.py collectstatic --noinput && exec python manage.py run_production"]

@@ -1,5 +1,6 @@
 Django==6.1
-django-ninja-extra==0.0.59
+django-ninja==1.7.0
+django-ninja-extra==0.31.7
 python-dateutil==2.8.2
 python-decouple==3.8
 segno==1.6.6
