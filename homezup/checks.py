@@ -1,6 +1,27 @@
 DEV_SECRET = "dev-only-change-this-secret"
 
 
+def debug_default(on_railway: bool) -> bool:
+    """Railway must not boot with DEBUG=True just because DJANGO_DEBUG was omitted."""
+    return not on_railway
+
+
+def cache_settings(testing: bool, debug: bool) -> dict:
+    """Login lockout must be shared across Gunicorn workers in production."""
+    if testing or debug:
+        return {
+            "default": {
+                "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            }
+        }
+    return {
+        "default": {
+            "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+            "LOCATION": "flexoper_cache",
+        }
+    }
+
+
 def production_misconfigurations(debug, secret_key, allowed_hosts, testing=False):
     """Return blocking problems for a public/production process."""
     if testing or debug:

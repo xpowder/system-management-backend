@@ -16,7 +16,7 @@ import sys
 from decouple import Csv, config
 from django.core.exceptions import ImproperlyConfigured
 
-from homezup.checks import DEV_SECRET, production_misconfigurations
+from homezup.checks import DEV_SECRET, cache_settings, debug_default, production_misconfigurations
 from homezup.database import build_databases
 from homezup.origins import merge_frontend_origin, railway_runtime_hosts, uses_cross_site_cookies
 
@@ -28,8 +28,8 @@ TESTING = "test" in sys.argv
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 SECRET_KEY = (config("DJANGO_SECRET_KEY", default=DEV_SECRET) or "").strip().strip('"').strip("'")
-DEBUG = config("DJANGO_DEBUG", default=True, cast=bool)
 ON_RAILWAY = bool(config("RAILWAY_ENVIRONMENT", default=""))
+DEBUG = config("DJANGO_DEBUG", default=debug_default(ON_RAILWAY), cast=bool)
 ALLOWED_HOSTS = list(
     config(
         "DJANGO_ALLOWED_HOSTS",
@@ -132,6 +132,8 @@ DATABASES = build_databases(
     pg_port=config("PGPORT", default="5432"),
 )
 
+CACHES = cache_settings(TESTING, DEBUG)
+
 
 # Password validation
 # https://docs.djangoproject.com/en/6.1/ref/settings/#auth-password-validators
@@ -150,6 +152,12 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
+
+if TESTING:
+    # Django docs: faster hasher in tests only. Production keeps PBKDF2/Argon2.
+    PASSWORD_HASHERS = [
+        'django.contrib.auth.hashers.MD5PasswordHasher',
+    ]
 
 
 # Internationalization

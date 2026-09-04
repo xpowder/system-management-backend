@@ -4,6 +4,7 @@ from calendar import month_name
 from typing import List, Optional
 from urllib.parse import quote
 import re
+import uuid
 
 from ninja import Router
 from ninja.errors import HttpError
@@ -826,10 +827,14 @@ def _member_identity(payload, required=True):
 @router.post('/fitness/members', response=MemberOut)
 def create_member(request, payload: MemberIn):
     cin, address, city = _member_identity(payload, required=True)
-    username = f'gym_{payload.first_name.lower()}_{payload.last_name.lower()}_{User.objects.count() + 1}'
-    user = User.objects.create_user(username=username, first_name=payload.first_name.strip(), last_name=payload.last_name.strip(), email=payload.email)
+    first_name = payload.first_name.strip()
+    last_name = payload.last_name.strip()
+    if not first_name or not last_name:
+        raise HttpError(400, 'First name and last name are required')
+    username = f'gym_{uuid.uuid4().hex[:16]}'
     try:
         with transaction.atomic():
+            user = User.objects.create_user(username=username, first_name=first_name, last_name=last_name, email=payload.email)
             member = ClientProfile.objects.create(
                 user=user,
                 phone=payload.phone.strip(),
@@ -840,7 +845,6 @@ def create_member(request, payload: MemberIn):
                 id_number=cin,
             )
     except IntegrityError:
-        user.delete()
         raise HttpError(409, 'A member with this CIN already exists')
     create_gym_notifications('new_member_registered', 'members', 'New member registered', f'{member.user.get_full_name()} joined the gym.', member.id, request.user)
     return member_data(member)

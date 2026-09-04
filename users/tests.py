@@ -53,6 +53,48 @@ class AdminUserApiTest(TestCase):
 		response = self.client.delete(f'/api/admin/users/{self.admin.id}')
 		self.assertEqual(response.status_code, 400)
 
+	def test_admin_cannot_change_a_gym_member_by_id(self):
+		self.client.force_login(self.admin)
+		response = self.client.patch(
+			f'/api/admin/users/{self.target.id}',
+			data=json.dumps({'password': 'hijacked-password'}),
+			content_type='application/json',
+		)
+		self.assertEqual(response.status_code, 404)
+		self.assertTrue(User.objects.get(id=self.target.id).check_password('password123'))
+
+	def test_admin_cannot_reset_a_superuser_password(self):
+		superuser = User.objects.create_superuser(username='protected-super', password='password123')
+		self.client.force_login(self.admin)
+		response = self.client.patch(
+			f'/api/admin/users/{superuser.id}',
+			data=json.dumps({'password': 'hijacked-password'}),
+			content_type='application/json',
+		)
+		self.assertEqual(response.status_code, 403)
+		superuser.refresh_from_db()
+		self.assertTrue(superuser.check_password('password123'))
+		self.assertTrue(superuser.is_active)
+		deleted = self.client.delete(f'/api/admin/users/{superuser.id}')
+		self.assertEqual(deleted.status_code, 403)
+		self.assertTrue(User.objects.filter(id=superuser.id).exists())
+
+	def test_created_staff_password_is_hashed(self):
+		self.client.force_login(self.admin)
+		create = self.client.post('/api/admin/users', data=json.dumps({
+			'username': 'hashed-user',
+			'password': 'password123',
+			'first_name': 'Hash',
+			'last_name': 'User',
+			'email': 'hash@example.com',
+			'role': 'Reception',
+		}), content_type='application/json')
+		self.assertEqual(create.status_code, 200)
+		stored = User.objects.get(username='hashed-user')
+		self.assertNotEqual(stored.password, 'password123')
+		self.assertTrue(stored.check_password('password123'))
+		self.assertNotIn('password', create.json())
+
 	def test_superuser_can_access_administration(self):
 		superuser = User.objects.create_superuser(username='super-user', password='password123')
 		self.client.force_login(superuser)

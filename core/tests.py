@@ -6,7 +6,7 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 
-from homezup.checks import DEV_SECRET, production_misconfigurations
+from homezup.checks import DEV_SECRET, cache_settings, debug_default, production_misconfigurations
 from homezup.origins import merge_frontend_origin, uses_cross_site_cookies
 
 
@@ -197,6 +197,20 @@ class ProductionSettingsTests(TestCase):
             allowed_hosts=["localhost"],
         )
         self.assertEqual(errors, [])
+
+    def test_railway_defaults_to_debug_off(self):
+        self.assertFalse(debug_default(True))
+        self.assertTrue(debug_default(False))
+
+    def test_production_login_lockout_uses_shared_cache(self):
+        self.assertIn(
+            "DatabaseCache",
+            cache_settings(testing=False, debug=False)["default"]["BACKEND"],
+        )
+        self.assertIn(
+            "locmem",
+            cache_settings(testing=True, debug=False)["default"]["BACKEND"].lower(),
+        )
 
 
 class FrontendOriginTests(TestCase):

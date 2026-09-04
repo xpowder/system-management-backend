@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from ninja import Schema
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class UserOut(BaseModel):
@@ -89,8 +89,8 @@ class ProviderProfileIn(BaseModel):
 
 
 class LoginIn(Schema):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=150)
+    password: str = Field(min_length=1, max_length=256)
 
 
 class AccountProfileUpdateIn(Schema):
@@ -101,8 +101,8 @@ class AccountProfileUpdateIn(Schema):
 
 
 class PasswordChangeIn(Schema):
-    current_password: str
-    new_password: str
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)
 
 
 class AdminUserOut(Schema):
@@ -119,8 +119,8 @@ class AdminUserOut(Schema):
 
 
 class AdminUserIn(Schema):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=150)
+    password: str = Field(min_length=1, max_length=256)
     first_name: str = ''
     last_name: str = ''
     email: str = ''
@@ -133,7 +133,7 @@ class AdminUserUpdate(Schema):
     email: Optional[str] = None
     is_active: Optional[bool] = None
     role: Optional[str] = None
-    password: Optional[str] = None
+    password: Optional[str] = Field(default=None, max_length=256)
 
 
 class MeOut(Schema):

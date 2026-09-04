@@ -7,6 +7,7 @@ from ninja import Router, Query
 from ninja.errors import HttpError
 from django.contrib.auth.models import Group, User
 from django.core.exceptions import ObjectDoesNotExist
+from django.db import IntegrityError
 from django.db.models import Q
 
 from core.auth import session_auth
@@ -28,6 +29,22 @@ def _require_admin(request):
     is_admin_user = request.user.is_authenticated and (request.user.is_superuser or (group is None and request.user.is_staff) or (group is not None and group.name in ['Admin', 'Super Admin']))
     if not is_admin_user:
         raise HttpError(403, "You don't have permission to access Administration.")
+
+
+def _staff_user_queryset():
+    return User.objects.filter(
+        Q(is_staff=True) | Q(is_superuser=True) | Q(groups__name__in=['Super Admin', 'Admin', 'Reception', 'Trainer'])
+    ).distinct()
+
+
+def _get_managed_staff_user(request, user_id):
+    try:
+        user = _staff_user_queryset().get(id=user_id)
+    except User.DoesNotExist:
+        raise HttpError(404, 'User not found.')
+    if user.is_superuser and not request.user.is_superuser:
+        raise HttpError(403, 'Only a Super Admin can change a Super Admin account.')
+    return user
 
 
 def _normalize_staff_role(role: str) -> str:
@@ -106,9 +123,7 @@ def _admin_user_data(user):
 @router.get('/admin/users', response=List[AdminUserOut])
 def list_admin_users(request, search: Optional[str] = None):
     _require_admin(request)
-    queryset = User.objects.filter(
-        Q(is_staff=True) | Q(is_superuser=True) | Q(groups__name__in=['Super Admin', 'Admin', 'Reception', 'Trainer'])
-    ).prefetch_related('groups').distinct().order_by('first_name', 'last_name', 'username')
+    queryset = _staff_user_queryset().prefetch_related('groups').order_by('first_name', 'last_name', 'username')
     if search:
         queryset = queryset.filter(Q(first_name__icontains=search) | Q(last_name__icontains=search) | Q(email__icontains=search) | Q(username__icontains=search))
     return [_admin_user_data(user) for user in queryset[:500]]
@@ -124,7 +139,10 @@ def create_admin_user(request, payload: AdminUserIn):
     role = _assert_assignable_role(request, payload.role) if payload.role else ''
     is_super_admin = role == 'Super Admin'
     is_admin_role = role in ('Admin', 'Super Admin')
-    user = User.objects.create_user(username=payload.username, password=payload.password, first_name=payload.first_name, last_name=payload.last_name, email=payload.email, is_staff=is_admin_role, is_superuser=is_super_admin)
+    try:
+        user = User.objects.create_user(username=payload.username, password=payload.password, first_name=payload.first_name, last_name=payload.last_name, email=payload.email, is_staff=is_admin_role, is_superuser=is_super_admin)
+    except IntegrityError:
+        raise HttpError(409, 'This username is already in use.')
     if role:
         user.groups.add(Group.objects.get_or_create(name=role)[0])
     from fitness.controllers import create_gym_notifications
@@ -136,10 +154,7 @@ def create_admin_user(request, payload: AdminUserIn):
 @router.patch('/admin/users/{user_id}', response=AdminUserOut)
 def update_admin_user(request, user_id: int, payload: AdminUserUpdate):
     _require_admin(request)
-    try:
-        user = User.objects.get(id=user_id)
-    except User.DoesNotExist:
-        raise HttpError(404, 'User not found.')
+    user = _get_managed_staff_user(request, user_id)
     previous_role = user.groups.first().name if user.groups.exists() else ('Super Admin' if user.is_superuser else 'Admin' if user.is_staff else 'User')
     was_active = user.is_active
     for field in ('first_name', 'last_name', 'email', 'is_active'):
@@ -177,10 +192,7 @@ def delete_admin_user(request, user_id: int):
     _require_admin(request)
     if request.user.id == user_id:
         raise HttpError(400, 'You cannot delete your own account.')
-    try:
-        user = User.objects.get(id=user_id)
-    except User.DoesNotExist:
-        raise HttpError(404, 'User not found.')
+    user = _get_managed_staff_user(request, user_id)
     if user.is_superuser and User.objects.filter(is_superuser=True, is_active=True).count() <= 1:
         raise HttpError(400, 'You cannot delete the last Super Admin.')
     user.delete()
@@ -263,7 +275,10 @@ def update_client(request, client_id: int, payload: ClientProfileUpdate):
         client.postal_code = payload.postal_code
     if payload.id_number is not None:
         client.id_number = payload.id_number
-    client.save()
+    try:
+        client.save()
+    except IntegrityError:
+        raise HttpError(409, 'A client with this identity already exists.')
     return client
 
 
@@ -344,7 +359,10 @@ def update_provider(request, provider_id: int, payload: ProviderProfileUpdate):
         provider.company_name = payload.company_name
     if payload.tax_id is not None:
         provider.tax_id = payload.tax_id
-    provider.save()
+    try:
+        provider.save()
+    except IntegrityError:
+        raise HttpError(409, 'A provider with this tax ID already exists.')
     return provider
 
 

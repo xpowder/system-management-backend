@@ -1,9 +1,12 @@
 """
 URL configuration for homezup project.
 """
+import logging
+
 from django.conf import settings
 from django.contrib import admin
 from django.urls import path, re_path
+from ninja.errors import HttpError
 from ninja_extra import NinjaExtraAPI
 
 from core.views import (
@@ -26,6 +29,8 @@ from bookings.exceptions import BookingError
 from fitness.controllers import router as fitness_router
 from users.controllers import router as users_router
 
+logger = logging.getLogger("flexoper.request")
+
 api = NinjaExtraAPI(
     title="FlexOper API",
     description="Gym desk API for members, memberships, payments, and attendance.",
@@ -41,6 +46,20 @@ def booking_error_handler(request, exc: BookingError):
         request,
         {"error": exc.message, "detail": exc.message},
         status=exc.status_code,
+    )
+
+
+@api.exception_handler(Exception)
+def unhandled_api_error(request, exc: Exception):
+    if isinstance(exc, HttpError):
+        return api.create_response(request, {"detail": str(exc)}, status=exc.status_code)
+    if isinstance(exc, BookingError):
+        return booking_error_handler(request, exc)
+    logger.exception("Unhandled API exception")
+    return api.create_response(
+        request,
+        {"detail": "Internal server error."},
+        status=500,
     )
 
 

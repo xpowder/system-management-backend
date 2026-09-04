@@ -229,3 +229,253 @@ class InactiveSessionTests(TestCase):
         user.save(update_fields=['is_active'])
         response = self.client.get('/api/fitness/members')
         self.assertEqual(response.status_code, 401)
+
+
+class AuthenticationInputTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username='desk-login',
+            password='correct-password',
+            is_staff=True,
+        )
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_valid_login_does_not_return_a_password(self):
+        response = self.client.post(
+            '/api/auth/login',
+            data=json.dumps({'username': 'desk-login', 'password': 'correct-password'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertNotIn('password', body)
+        self.assertEqual(body['username'], 'desk-login')
+        self.assertNotIn(b'Traceback', response.content)
+
+    def test_unknown_user_and_wrong_password_are_the_same_401(self):
+        missing = self.client.post(
+            '/api/auth/login',
+            data=json.dumps({'username': 'nobody', 'password': 'correct-password'}),
+            content_type='application/json',
+        )
+        wrong = self.client.post(
+            '/api/auth/login',
+            data=json.dumps({'username': 'desk-login', 'password': 'nope'}),
+            content_type='application/json',
+        )
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(wrong.status_code, 401)
+        self.assertEqual(missing.json()['detail'], wrong.json()['detail'])
+
+    def test_empty_and_missing_login_fields_are_422(self):
+        empty = self.client.post(
+            '/api/auth/login',
+            data=json.dumps({'username': '', 'password': ''}),
+            content_type='application/json',
+        )
+        missing = self.client.post(
+            '/api/auth/login',
+            data=json.dumps({}),
+            content_type='application/json',
+        )
+        self.assertEqual(empty.status_code, 422)
+        self.assertEqual(missing.status_code, 422)
+
+    def test_oversized_login_fields_are_rejected(self):
+        response = self.client.post(
+            '/api/auth/login',
+            data=json.dumps({'username': 'a' * 500, 'password': 'b' * 300}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_malformed_json_does_not_crash(self):
+        response = self.client.post(
+            '/api/auth/login',
+            data='{"username":',
+            content_type='application/json',
+        )
+        self.assertIn(response.status_code, (400, 422))
+        self.assertNotIn(b'Traceback', response.content)
+        self.assertNotIn(b'DJANGO_SECRET', response.content)
+
+    def test_logout_invalidates_the_session(self):
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get('/api/auth/me').status_code, 200)
+        logout = self.client.post('/api/auth/logout')
+        self.assertEqual(logout.status_code, 200)
+        self.assertEqual(self.client.get('/api/auth/me').status_code, 401)
+
+    def test_password_change_rejects_the_wrong_current_password(self):
+        self.client.force_login(self.user)
+        response = self.client.post(
+            '/api/auth/password',
+            data=json.dumps({
+                'current_password': 'wrong-password',
+                'new_password': 'new-password-123',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('correct-password'))
+
+
+class CrashAndInjectionTests(TestCase):
+    def setUp(self):
+        self.staff = User.objects.create_user(username='crash-staff', password='password123', is_staff=True)
+        self.client.force_login(self.staff)
+
+    def test_sql_injection_in_member_search_does_not_error(self):
+        response = self.client.get(
+            '/api/fitness/members',
+            {'search': "' OR 1=1; DROP TABLE users_clientprofile; --"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+        self.assertNotIn(b'Traceback', response.content)
+
+    def test_invalid_member_id_is_404(self):
+        response = self.client.get('/api/fitness/members/999999')
+        self.assertEqual(response.status_code, 404)
+
+    def test_negative_payment_amount_is_rejected(self):
+        response = self.client.post(
+            '/api/fitness/memberships/1/payments',
+            data=json.dumps({'amount': '-10.00', 'received_by': 'desk', 'notes': ''}),
+            content_type='application/json',
+        )
+        self.assertIn(response.status_code, (404, 422))
+        self.assertNotIn(b'Traceback', response.content)
+
+    def test_wrong_content_type_does_not_crash(self):
+        response = self.client.post(
+            '/api/fitness/members',
+            data='first_name=Hacker',
+            content_type='text/plain',
+        )
+        self.assertIn(response.status_code, (400, 415, 422))
+        self.assertNotIn(b'Traceback', response.content)
+
+    def test_duplicate_staff_username_is_409(self):
+        payload = {
+            'username': 'crash-staff',
+            'password': 'password123',
+            'first_name': 'Dup',
+            'last_name': 'User',
+            'email': 'dup@example.com',
+            'role': 'Reception',
+        }
+        response = self.client.post(
+            '/api/admin/users',
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 409)
+
+
+class BookingIdorTests(TestCase):
+    def setUp(self):
+        from datetime import date
+
+        from bookings.services import create_booking
+        from bookings.tests.helpers import make_client, make_property, make_provider
+
+        self.client_a = make_client(username='book-client-a', phone='0610000001')
+        self.client_b = make_client(username='book-client-b', phone='0610000002')
+        self.provider = make_provider(username='book-prov')
+        self.property = make_property(self.provider)
+        self.booking_b = create_booking(
+            client=self.client_b,
+            property_obj=self.property,
+            start_date=date(2026, 10, 1),
+            end_date=date(2026, 11, 1),
+        )
+
+    def test_client_cannot_read_another_clients_booking(self):
+        self.client.force_login(self.client_a.user)
+        detail = self.client.get(f'/api/bookings/{self.booking_b.id}')
+        payments = self.client.get(f'/api/bookings/{self.booking_b.id}/payments')
+        other_list = self.client.get(f'/api/clients/{self.client_b.id}/bookings')
+        filtered = self.client.get('/api/bookings', {'client_id': self.client_b.id})
+        self.assertEqual(detail.status_code, 403)
+        self.assertEqual(payments.status_code, 403)
+        self.assertEqual(other_list.status_code, 403)
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual(filtered.json(), [])
+
+
+class RoleBoundaryTests(TestCase):
+    def setUp(self):
+        self.member_user = User.objects.create_user(username='role-member', password='password123')
+        ClientProfile.objects.create(user=self.member_user, id_number='ROLE-MEM')
+        self.reception = User.objects.create_user(username='role-reception', password='password123')
+        Group.objects.get_or_create(name='Reception')[0].user_set.add(self.reception)
+
+    def test_member_cannot_use_admin_user_api(self):
+        self.client.force_login(self.member_user)
+        listed = self.client.get('/api/admin/users')
+        created = self.client.post(
+            '/api/admin/users',
+            data=json.dumps({
+                'username': 'escalated',
+                'password': 'password123',
+                'first_name': 'Nope',
+                'last_name': 'Nope',
+                'email': 'nope@example.com',
+                'role': 'Admin',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(listed.status_code, 403)
+        self.assertEqual(created.status_code, 403)
+        self.assertFalse(User.objects.filter(username='escalated').exists())
+
+    def test_reception_cannot_create_staff_users(self):
+        self.client.force_login(self.reception)
+        response = self.client.post(
+            '/api/admin/users',
+            data=json.dumps({
+                'username': 'from-reception',
+                'password': 'password123',
+                'first_name': 'From',
+                'last_name': 'Desk',
+                'email': 'from@example.com',
+                'role': 'Admin',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_member_cannot_open_django_admin(self):
+        self.client.force_login(self.member_user)
+        response = self.client.get('/admin/')
+        self.assertIn(response.status_code, (302, 403))
+
+
+class CorsAndSecretExposureTests(TestCase):
+    def test_untrusted_origin_does_not_receive_cors_credentials(self):
+        response = self.client.get('/api/auth/me', HTTP_ORIGIN='https://evil.example')
+        self.assertNotEqual(response.get('Access-Control-Allow-Origin'), 'https://evil.example')
+
+    def test_health_and_docs_do_not_leak_secrets(self):
+        from django.conf import settings
+
+        health = self.client.get('/healthz')
+        docs = self.client.get('/api/docs')
+        self.assertEqual(health.status_code, 200)
+        self.assertEqual(docs.status_code, 200)
+        secret = settings.SECRET_KEY.encode()
+        self.assertNotIn(secret, health.content)
+        self.assertNotIn(secret, docs.content)
+        self.assertNotIn(b'Traceback', docs.content)
+
+    def test_cors_is_not_a_wildcard_with_credentials(self):
+        from django.conf import settings
+
+        self.assertTrue(settings.CORS_ALLOW_CREDENTIALS)
+        self.assertFalse(getattr(settings, 'CORS_ALLOW_ALL_ORIGINS', False))
+        self.assertNotIn('*', settings.CORS_ALLOWED_ORIGINS)

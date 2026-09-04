@@ -12,6 +12,7 @@ echo "PORT detected"
 echo "Starting Homezup backend on 0.0.0.0:$PORT"
 echo "Running migrations"
 python manage.py migrate --noinput
+python manage.py createcachetable
 echo "Migrations done. Starting Gunicorn."
 exec python -m gunicorn homezup.wsgi:application \
   --bind 0.0.0.0:$PORT \
