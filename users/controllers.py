@@ -124,7 +124,7 @@ def create_admin_user(request, payload: AdminUserIn):
         user.groups.add(Group.objects.get_or_create(name=role)[0])
     from fitness.controllers import create_gym_notifications
     display_name = user.get_full_name() or user.username
-    create_gym_notifications('new_staff_user_created', 'system', 'New staff user created', f'{display_name} was added as {role or "User"}.', actor=request.user)
+    create_gym_notifications('new_staff_user_created', 'system', 'New staff user created', f'{display_name} was added as {role or "User"}.', actor=request.user, admin_only=True)
     return _admin_user_data(user)
 
 
@@ -159,9 +159,9 @@ def update_admin_user(request, user_id: int, payload: AdminUserUpdate):
     display_name = user.get_full_name() or user.username
     from fitness.controllers import create_gym_notifications
     if payload.role is not None and payload_role_label != previous_role:
-        create_gym_notifications('user_role_changed', 'system', 'User role changed', f'{display_name} role changed from {previous_role} to {payload_role_label}.', actor=request.user)
+        create_gym_notifications('user_role_changed', 'system', 'User role changed', f'{display_name} role changed from {previous_role} to {payload_role_label}.', actor=request.user, admin_only=True)
     if payload.is_active is False and was_active:
-        create_gym_notifications('user_deactivated', 'system', 'User deactivated', f'{display_name} was deactivated.', actor=request.user)
+        create_gym_notifications('user_deactivated', 'system', 'User deactivated', f'{display_name} was deactivated.', actor=request.user, admin_only=True)
     return _admin_user_data(user)
 
 

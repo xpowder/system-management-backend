@@ -6,7 +6,7 @@ from django.test import Client, TestCase, override_settings
 from unittest.mock import patch
 
 from bookings.tests.helpers import make_admin, make_client, make_provider
-from fitness.models import GymNotification
+from fitness.models import GymExpense, GymNotification, Membership, MembershipPlan
 from users.models import ClientProfile
 
 
@@ -603,6 +603,73 @@ class RoleBoundaryTests(TestCase):
         self.client.force_login(superuser)
         response = self.client.get('/admin/')
         self.assertEqual(response.status_code, 200)
+
+
+class GymDeskPermissionTests(TestCase):
+    def setUp(self):
+        self.member_user = User.objects.create_user(username='perm-member', password='password123')
+        self.member = ClientProfile.objects.create(user=self.member_user, id_number='PERM-MEM')
+        self.reception = User.objects.create_user(username='perm-reception', password='password123')
+        Group.objects.get_or_create(name='Reception')[0].user_set.add(self.reception)
+        self.trainer_login = User.objects.create_user(username='perm-trainer', password='password123')
+        Group.objects.get_or_create(name='Trainer')[0].user_set.add(self.trainer_login)
+        self.admin = User.objects.create_user(username='perm-admin', password='password123', is_staff=True)
+        plan = MembershipPlan.objects.create(name='Monthly', duration_months=1, price=10)
+        self.membership = Membership.objects.create(
+            member=self.member,
+            plan=plan,
+            start_date='2026-01-01',
+            end_date='2026-02-01',
+            price=10,
+        )
+        self.expense = GymExpense.objects.create(
+            category='water',
+            title='Water',
+            amount=20,
+            year=2026,
+            month=1,
+        )
+
+    def test_unauthenticated_sensitive_routes_are_401(self):
+        for method, path in (
+            ('delete', f'/api/fitness/members/{self.member.id}'),
+            ('delete', f'/api/fitness/memberships/{self.membership.id}'),
+            ('delete', f'/api/fitness/expenses/{self.expense.id}'),
+            ('delete', f'/api/admin/users/{self.admin.id}'),
+            ('get', '/api/fitness/reports/overview'),
+            ('get', '/api/notifications'),
+        ):
+            response = getattr(self.client, method)(path)
+            self.assertEqual(response.status_code, 401, path)
+
+    def test_gym_member_sensitive_routes_are_403(self):
+        self.client.force_login(self.member_user)
+        self.assertEqual(self.client.delete(f'/api/fitness/members/{self.member.id}').status_code, 403)
+        self.assertEqual(self.client.get(f'/api/fitness/members/{self.member.id}').status_code, 403)
+        self.assertEqual(self.client.get('/api/fitness/payments').status_code, 403)
+        self.assertEqual(self.client.get('/api/fitness/reports/overview').status_code, 403)
+        self.assertTrue(ClientProfile.objects.filter(id=self.member.id, is_active=True).exists())
+
+    def test_trainer_login_cannot_use_gym_desk(self):
+        self.client.force_login(self.trainer_login)
+        self.assertEqual(self.client.get('/api/auth/me').status_code, 200)
+        self.assertEqual(self.client.get('/api/fitness/members').status_code, 403)
+
+    def test_reception_can_run_desk_work_but_not_admin_finance(self):
+        self.client.force_login(self.reception)
+        self.assertEqual(self.client.get('/api/fitness/members').status_code, 200)
+        self.assertEqual(self.client.get(f'/api/fitness/members/{self.member.id}').status_code, 200)
+        self.assertEqual(self.client.get('/api/fitness/payments').status_code, 200)
+        self.assertEqual(self.client.get('/api/fitness/reports/classes').status_code, 200)
+        self.assertEqual(self.client.get('/api/fitness/reports/overview').status_code, 403)
+        self.assertEqual(self.client.get('/api/fitness/expenses').status_code, 403)
+        self.assertEqual(self.client.delete(f'/api/fitness/expenses/{self.expense.id}').status_code, 403)
+        self.assertEqual(self.client.get('/api/fitness/trainers').status_code, 403)
+        deactivated = self.client.delete(f'/api/fitness/members/{self.member.id}')
+        self.assertEqual(deactivated.status_code, 200)
+        self.member.refresh_from_db()
+        self.assertFalse(self.member.is_active)
+        self.assertTrue(GymExpense.objects.filter(id=self.expense.id).exists())
 
 
 class CorsAndSecretExposureTests(TestCase):

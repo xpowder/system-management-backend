@@ -259,6 +259,12 @@ curl -X POST http://127.0.0.1:8000/api/fitness/classes \
 curl -X POST http://127.0.0.1:8000/api/fitness/classes/1/members \
    -H "Content-Type: application/json" \
    -d '{"client_id":1}'
+
+# Member 360 (gym staff session). Reception, Admin, Super Admin, or is_staff.
+# Anonymous 401. Gym member / Trainer group 403. Missing member 404.
+# Empty memberships/payments/attendance return [] and reminder is null.
+# Attendance is the 50 most recent visits for that member.
+curl http://127.0.0.1:8000/api/fitness/members/1/360
 ```
 
 The Django admin also shows each class's member count and automatic team total in MAD.

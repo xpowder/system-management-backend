@@ -6,7 +6,7 @@ from django.contrib.auth.models import Group, User
 from django.test import TestCase
 from django.utils import timezone
 
-from fitness.models import ClassMember, FitnessClassType, GymExpense, GymNotification, GymPayment, GymWhatsAppReminder, Membership, MembershipPlan, Trainer, TrainerPayroll, TrainingClass
+from fitness.models import Attendance, ClassMember, FitnessClassType, GymExpense, GymNotification, GymPayment, GymWhatsAppReminder, Membership, MembershipPlan, Trainer, TrainerPayroll, TrainingClass
 from fitness.controllers import create_expiring_membership_notifications
 from users.models import ClientProfile
 
@@ -525,6 +525,48 @@ class GymNotificationApiTest(TestCase):
         self.assertEqual(response.status_code, 200)
         notifications = self.client.get('/api/notifications').json()
         self.assertTrue(any(item['title'] == 'Payment marked as paid' for item in notifications))
+
+    def test_reception_cannot_read_or_change_notification_settings(self):
+        reception = User.objects.create_user(username='notify-reception')
+        Group.objects.get_or_create(name='Reception')[0].user_set.add(reception)
+        self.client.force_login(reception)
+        self.assertEqual(self.client.get('/api/notifications/settings').status_code, 403)
+        denied = self.client.put(
+            '/api/notifications/settings',
+            data=json.dumps({'membership_expiring_soon': False}),
+            content_type='application/json',
+        )
+        self.assertEqual(denied.status_code, 403)
+
+    def test_staff_admin_notifications_are_not_delivered_to_reception(self):
+        reception = User.objects.create_user(username='staff-notify-reception')
+        Group.objects.get_or_create(name='Reception')[0].user_set.add(reception)
+        created = self.client.post(
+            '/api/admin/users',
+            data=json.dumps({
+                'username': 'new-desk',
+                'password': 'DeskPass-2026!',
+                'first_name': 'New',
+                'last_name': 'Desk',
+                'email': 'newdesk@example.com',
+                'role': 'Reception',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(created.status_code, 200)
+        self.assertTrue(GymNotification.objects.filter(recipient=self.admin, title='New staff user created').exists())
+        self.assertFalse(GymNotification.objects.filter(recipient=reception, title='New staff user created').exists())
+
+        GymNotification.objects.create(
+            recipient=reception,
+            category='system',
+            title='User role changed',
+            message='Should stay hidden',
+        )
+        self.client.force_login(reception)
+        titles = [item['title'] for item in self.client.get('/api/notifications').json()]
+        self.assertNotIn('New staff user created', titles)
+        self.assertNotIn('User role changed', titles)
 
 
 class ClassRevenueReportTest(TestCase):
@@ -1239,5 +1281,147 @@ class ThousandMemberQueryTests(TestCase):
         self.assertEqual(dashboard.status_code, 200)
         self.assertEqual(dashboard.json()['members'], 1000)
         self.assertLessEqual(len(dash_ctx.captured_queries), 16)
+
+
+class Member360ApiTest(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(username='360-admin', password='password123', is_staff=True)
+        self.today = timezone.localdate()
+        self.user_a = User.objects.create_user(
+            username='360-member-a',
+            first_name='Sara',
+            last_name='Benali',
+            email='sara@example.com',
+        )
+        self.member_a = ClientProfile.objects.create(
+            user=self.user_a,
+            phone='0611111111',
+            id_number='CIN360A',
+            address='12 Rue Atlas',
+            city='Casablanca',
+        )
+        self.user_b = User.objects.create_user(username='360-member-b', first_name='Lina', last_name='Said')
+        self.member_b = ClientProfile.objects.create(user=self.user_b, phone='0622222222', id_number='CIN360B')
+        self.plan = MembershipPlan.objects.create(name='Monthly', duration_months=1, price=Decimal('400.00'))
+        self.older = Membership.objects.create(
+            member=self.member_a,
+            plan=self.plan,
+            start_date=self.today - timedelta(days=60),
+            end_date=self.today - timedelta(days=30),
+            price=Decimal('400.00'),
+            notes='Previous month',
+        )
+        self.current = Membership.objects.create(
+            member=self.member_a,
+            plan=self.plan,
+            start_date=self.today - timedelta(days=1),
+            end_date=self.today + timedelta(days=7),
+            price=Decimal('400.00'),
+            notes='Current plan',
+        )
+        self.other_membership = Membership.objects.create(
+            member=self.member_b,
+            plan=self.plan,
+            start_date=self.today,
+            end_date=self.today + timedelta(days=30),
+            price=Decimal('400.00'),
+            notes='Other member',
+        )
+        self.pay_a = GymPayment.objects.create(
+            membership=self.current,
+            amount=Decimal('100.00'),
+            received_by='Desk',
+            notes='A payment',
+        )
+        GymPayment.objects.create(
+            membership=self.other_membership,
+            amount=Decimal('50.00'),
+            received_by='Desk',
+            notes='B payment',
+        )
+        self.training_class = TrainingClass.objects.create(
+            name='Morning Boxing',
+            class_type=FitnessClassType.BOXING,
+        )
+        ClassMember.objects.create(training_class=self.training_class, client=self.member_a)
+        Attendance.objects.create(member=self.member_a)
+        Attendance.objects.create(member=self.member_b)
+        GymWhatsAppReminder.objects.create(
+            membership=self.current,
+            kind='expiring_soon,unpaid',
+            message='Due',
+            sent_by='Desk',
+        )
+
+    def test_anonymous_gets_401(self):
+        response = self.client.get(f'/api/fitness/members/{self.member_a.id}/360')
+        self.assertEqual(response.status_code, 401)
+
+    def test_gym_member_and_trainer_get_403(self):
+        member_login = User.objects.create_user(username='360-self', password='password123')
+        ClientProfile.objects.create(user=member_login, id_number='CIN360SELF')
+        self.client.force_login(member_login)
+        self.assertEqual(self.client.get(f'/api/fitness/members/{self.member_a.id}/360').status_code, 403)
+        trainer = User.objects.create_user(username='360-trainer', password='password123')
+        Group.objects.get_or_create(name='Trainer')[0].user_set.add(trainer)
+        self.client.force_login(trainer)
+        self.assertEqual(self.client.get(f'/api/fitness/members/{self.member_a.id}/360').status_code, 403)
+
+    def test_reception_admin_and_superuser_can_read(self):
+        reception = User.objects.create_user(username='360-reception', password='password123')
+        Group.objects.get_or_create(name='Reception')[0].user_set.add(reception)
+        self.client.force_login(reception)
+        self.assertEqual(self.client.get(f'/api/fitness/members/{self.member_a.id}/360').status_code, 200)
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.get(f'/api/fitness/members/{self.member_a.id}/360').status_code, 200)
+        superuser = User.objects.create_superuser(
+            username='360-super',
+            email='360-super@example.com',
+            password='password123',
+        )
+        self.client.force_login(superuser)
+        self.assertEqual(self.client.get(f'/api/fitness/members/{self.member_a.id}/360').status_code, 200)
+
+    def test_missing_member_is_404(self):
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.get('/api/fitness/members/999999/360').status_code, 404)
+
+    def test_payload_is_scoped_to_the_member(self):
+        self.client.force_login(self.admin)
+        body = self.client.get(f'/api/fitness/members/{self.member_a.id}/360').json()
+        member = body['member']
+        self.assertEqual(member['id'], self.member_a.id)
+        self.assertEqual(member['name'], 'Sara Benali')
+        self.assertEqual(member['id_number'], 'CIN360A')
+        self.assertEqual(member['phone'], '0611111111')
+        self.assertTrue(member['is_active'])
+        self.assertEqual(member['class_id'], self.training_class.id)
+        self.assertEqual(body['training_class']['name'], 'Morning Boxing')
+        membership_ids = [item['id'] for item in body['memberships']]
+        self.assertEqual(membership_ids[0], self.current.id)
+        self.assertEqual(set(membership_ids), {self.older.id, self.current.id})
+        self.assertNotIn(self.other_membership.id, membership_ids)
+        self.assertEqual(body['memberships'][0]['plan']['name'], 'Monthly')
+        self.assertEqual(body['memberships'][0]['notes'], 'Current plan')
+        payment_ids = [item['id'] for item in body['payments']]
+        self.assertEqual(payment_ids, [self.pay_a.id])
+        self.assertEqual(body['payments'][0]['notes'], 'A payment')
+        attendance_members = {item['member_id'] for item in body['attendance']}
+        self.assertEqual(attendance_members, {self.member_a.id})
+        self.assertEqual(body['reminder']['member_id'], self.member_a.id)
+        self.assertEqual(body['reminder']['membership_id'], self.current.id)
+
+    def test_empty_history_is_200(self):
+        empty_user = User.objects.create_user(username='360-empty', first_name='Empty')
+        empty = ClientProfile.objects.create(user=empty_user, id_number='CIN360E')
+        self.client.force_login(self.admin)
+        body = self.client.get(f'/api/fitness/members/{empty.id}/360').json()
+        self.assertEqual(body['member']['id'], empty.id)
+        self.assertEqual(body['memberships'], [])
+        self.assertEqual(body['payments'], [])
+        self.assertEqual(body['attendance'], [])
+        self.assertIsNone(body['reminder'])
+        self.assertIsNone(body['training_class'])
+
 
 

@@ -20,23 +20,29 @@ from fitness.attendance import attendance_data, class_headcount, desk_member, li
 from fitness.exports import cash_log_pdf_response, cash_log_xlsx_response, monthly_pdf_response, monthly_xlsx_response
 from fitness.models import Attendance, ClassMember, ExpenseCategory, FitnessClassType, GymExpense, GymNotification, GymNotificationSettings, GymPayment, GymWhatsAppReminder, Membership, MembershipPlan, PaymentStatusOverride, Trainer, TrainerPayroll, TrainingClass
 from fitness.receipts import receipt_html_response, receipt_number, receipt_pdf_response
-from fitness.schemas import AttendanceCheckOutIn, AttendanceDeskOut, AttendanceIn, AttendanceLookupOut, AttendanceOut, ClassMemberIn, ClassMemberOut, ClassRevenueReportOut, ExpenseCategoryTotalOut, GymExpenseIn, GymExpenseOut, GymPaymentIn, GymPaymentOut, MemberClassIn, MemberClassOut, MemberIn, MemberOut, MembershipIn, MembershipOut, MembershipPriceIn, MembershipRemainingIn, MonthlyOverviewOut, NotificationOut, NotificationSettingsIn, NotificationSettingsOut, PaymentStatusUpdateIn, PlanIn, PlanOut, TrainerIn, TrainerOut, TrainerPayrollIn, TrainerPayrollReportOut, TrainingClassIn, TrainingClassOut, WhatsAppReminderListOut, WhatsAppReminderOut, WhatsAppReminderSentIn
+from fitness.schemas import AttendanceCheckOutIn, AttendanceDeskOut, AttendanceIn, AttendanceLookupOut, AttendanceOut, ClassMemberIn, ClassMemberOut, ClassRevenueReportOut, ExpenseCategoryTotalOut, GymExpenseIn, GymExpenseOut, GymPaymentIn, GymPaymentOut, Member360Out, MemberClassIn, MemberClassOut, MemberIn, MemberOut, MembershipIn, MembershipOut, MembershipPriceIn, MembershipRemainingIn, MonthlyOverviewOut, NotificationOut, NotificationSettingsIn, NotificationSettingsOut, PaymentStatusUpdateIn, PlanIn, PlanOut, TrainerIn, TrainerOut, TrainerPayrollIn, TrainerPayrollReportOut, TrainingClassIn, TrainingClassOut, WhatsAppReminderListOut, WhatsAppReminderOut, WhatsAppReminderSentIn
 from users.models import ClientProfile
 from users.permissions import is_admin
 
 
 router = Router(auth=gym_staff_auth)
 
+MEMBER_360_ATTENDANCE_LIMIT = 50
+
 
 def _require_settings_admin(request):
-    if not request.user.is_authenticated or not (request.user.is_superuser or request.user.is_staff):
+    if not request.user.is_authenticated or not is_admin(request.user):
         raise HttpError(403, "You don't have permission to change notification settings.")
 
 
 ADMIN_ONLY_NOTIFICATION_TITLES = (
     'Trainer added',
     'Trainer payroll updated',
+    'Trainer removed',
     'Expense recorded',
+    'New staff user created',
+    'User role changed',
+    'User deactivated',
 )
 
 
@@ -471,6 +477,18 @@ def membership_data(item):
     }
 
 
+def membership_360_data(item):
+    data = membership_data(item)
+    plan = item.plan
+    data['plan'] = {
+        'id': plan.id,
+        'name': plan.name,
+        'duration_months': plan.duration_months,
+        'price': plan.price,
+    }
+    return data
+
+
 def _reminder_membership_qs():
     """Memberships that need a WhatsApp reminder, with paid_total annotated."""
     today = timezone.localdate()
@@ -600,15 +618,21 @@ def reminder_message(name, reasons, end_date, days_left, remaining):
     return ' '.join(parts)
 
 
-def _reminder_rows():
+def _reminder_rows(member_id=None):
     today = timezone.localdate()
     expired_after = today - timedelta(days=60)
     zero = Decimal('0.00')
-    memberships = list(_reminder_membership_qs())
-    latest = {
-        row['membership_id']: row['sent_at']
-        for row in GymWhatsAppReminder.objects.values('membership_id').annotate(sent_at=Max('created_at'))
-    }
+    queryset = _reminder_membership_qs()
+    if member_id is not None:
+        queryset = queryset.filter(member_id=member_id)
+    memberships = list(queryset)
+    membership_ids = [item.id for item in memberships]
+    latest = {}
+    if membership_ids:
+        latest = {
+            row['membership_id']: row['sent_at']
+            for row in GymWhatsAppReminder.objects.filter(membership_id__in=membership_ids).values('membership_id').annotate(sent_at=Max('created_at'))
+        }
     items = []
     for item in memberships:
         remaining = max(item.price - (item.paid_total or zero), zero)
@@ -797,6 +821,61 @@ def get_member(request, member_id: int):
     except ClientProfile.DoesNotExist:
         raise HttpError(404, 'Member not found')
     return member_data(member)
+
+
+@router.get('/fitness/members/{member_id}/360', response=Member360Out)
+def get_member_360(request, member_id: int):
+    """Desk 360 view for one member. Gym staff only. 404 if the member does not exist."""
+    try:
+        member = ClientProfile.objects.select_related('user').prefetch_related(
+            Prefetch(
+                'fitness_memberships',
+                queryset=ClassMember.objects.filter(is_active=True).select_related('training_class'),
+                to_attr='active_classes',
+            )
+        ).get(id=member_id)
+    except ClientProfile.DoesNotExist:
+        raise HttpError(404, 'Member not found')
+
+    assignment = member.active_classes[0] if member.active_classes else None
+    profile = member_data(member)
+    profile['is_active'] = member.is_active
+    training_class = None
+    class_id = None
+    class_name = ''
+    if assignment:
+        class_id = assignment.training_class_id
+        class_name = assignment.training_class.name
+        training_class = {'id': class_id, 'name': class_name}
+
+    memberships = list(
+        _memberships_with_paid_total().filter(member_id=member_id).order_by('-start_date', '-id')
+    )
+    payments = [
+        payment_data(item)
+        for item in _payment_queryset().filter(membership__member_id=member_id).order_by('-received_at', '-id')
+    ]
+    visits = list(
+        Attendance.objects.filter(member_id=member_id)
+        .select_related('member__user')
+        .order_by('-checked_in_at')[:MEMBER_360_ATTENDANCE_LIMIT]
+    )
+    reminder_rows = _reminder_rows(member_id=member_id)
+    reminder_rows.sort(
+        key=lambda row: (
+            0 if 'expiring_soon' in row['reasons'] else 1 if 'unpaid' in row['reasons'] else 2,
+            row['days_left'],
+            -row['membership_id'],
+        )
+    )
+    return {
+        'member': profile,
+        'training_class': training_class,
+        'memberships': [membership_360_data(item) for item in memberships],
+        'payments': payments,
+        'attendance': [attendance_data(visit, class_id, class_name) for visit in visits],
+        'reminder': reminder_rows[0] if reminder_rows else None,
+    }
 
 
 def _normalize_cin(value):

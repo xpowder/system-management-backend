@@ -197,6 +197,37 @@ class MemberOut(BaseModel):
     class_name: str = ''
 
 
+class Member360ClassOut(BaseModel):
+    id: int
+    name: str
+
+
+class Member360PlanOut(BaseModel):
+    id: int
+    name: str
+    duration_months: int
+    price: Decimal
+
+
+class Member360MemberOut(MemberOut):
+    is_active: bool = True
+
+
+class Member360MembershipOut(BaseModel):
+    id: int
+    member_id: int
+    plan_id: int
+    plan: Member360PlanOut
+    start_date: date
+    end_date: date
+    price: Decimal
+    status: str
+    payment_status: str
+    total_paid: Decimal
+    remaining_balance: Decimal
+    notes: str = ''
+
+
 class AttendanceIn(BaseModel):
     member_id: int
 
@@ -395,3 +426,13 @@ class WhatsAppReminderListOut(BaseModel):
 
 class WhatsAppReminderSentIn(BaseModel):
     message: str = ''
+
+
+class Member360Out(BaseModel):
+    """Nested desk view for one member. Attendance is the 50 most recent visits."""
+    member: Member360MemberOut
+    training_class: Optional[Member360ClassOut] = None
+    memberships: List[Member360MembershipOut]
+    payments: List[GymPaymentOut]
+    attendance: List[AttendanceOut]
+    reminder: Optional[WhatsAppReminderOut] = None
