@@ -54,11 +54,7 @@ A Django-based local PC application for managing property bookings, payments, an
    ```bash
    python manage.py createsuperuser
    ```
-   Or seed sample data with:
-   ```bash
-   python manage.py seed_data
-   ```
-   (Default credentials: username: admin, password: admin123)
+   Choose your own staff username and a strong password. Do not reuse a shared default password.
 
 5. **Start Development Server**
    ```bash

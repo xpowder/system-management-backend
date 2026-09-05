@@ -20,7 +20,12 @@ def healthz(request):
 
 
 def api_home(request):
-    return redirect("/api/docs")
+    if settings.DEBUG or getattr(settings, "TESTING", False):
+        return redirect("/api/docs")
+    origin = (getattr(settings, "FRONTEND_ORIGIN", "") or "").rstrip("/")
+    if origin:
+        return redirect(origin)
+    return HttpResponse("FlexOper API", content_type="text/plain; charset=utf-8")
 
 
 def spa_index(request, rest=""):

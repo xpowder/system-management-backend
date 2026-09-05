@@ -22,6 +22,7 @@ from fitness.models import Attendance, ClassMember, ExpenseCategory, FitnessClas
 from fitness.receipts import receipt_html_response, receipt_number, receipt_pdf_response
 from fitness.schemas import AttendanceCheckOutIn, AttendanceDeskOut, AttendanceIn, AttendanceLookupOut, AttendanceOut, ClassMemberIn, ClassMemberOut, ClassRevenueReportOut, ExpenseCategoryTotalOut, GymExpenseIn, GymExpenseOut, GymPaymentIn, GymPaymentOut, MemberClassIn, MemberClassOut, MemberIn, MemberOut, MembershipIn, MembershipOut, MembershipPriceIn, MembershipRemainingIn, MonthlyOverviewOut, NotificationOut, NotificationSettingsIn, NotificationSettingsOut, PaymentStatusUpdateIn, PlanIn, PlanOut, TrainerIn, TrainerOut, TrainerPayrollIn, TrainerPayrollReportOut, TrainingClassIn, TrainingClassOut, WhatsAppReminderListOut, WhatsAppReminderOut, WhatsAppReminderSentIn
 from users.models import ClientProfile
+from users.permissions import is_admin
 
 
 router = Router(auth=gym_staff_auth)
@@ -32,7 +33,6 @@ def _require_settings_admin(request):
         raise HttpError(403, "You don't have permission to change notification settings.")
 
 
-ADMIN_GROUPS = ['Admin', 'Super Admin']
 ADMIN_ONLY_NOTIFICATION_TITLES = (
     'Trainer added',
     'Trainer payroll updated',
@@ -55,14 +55,7 @@ def _received_by_for_payment(request, sent: str) -> str:
 
 
 def _is_gym_admin(user):
-    if not user or not getattr(user, 'is_authenticated', False) or not getattr(user, 'is_active', True):
-        return False
-    if user.is_superuser:
-        return True
-    group = user.groups.first()
-    if group is None:
-        return bool(user.is_staff)
-    return group.name in ADMIN_GROUPS
+    return is_admin(user)
 
 
 def _require_gym_admin(request):

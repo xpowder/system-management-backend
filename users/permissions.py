@@ -1,5 +1,6 @@
 """Role helpers for the existing Django User + profile model."""
 from django.contrib.auth.models import User
+from django.core.exceptions import ObjectDoesNotExist
 
 from users.models import UserRole
 
@@ -29,6 +30,21 @@ def is_provider(user: User) -> bool:
 
 def is_client(user: User) -> bool:
     return (get_user_role(user) or '').lower() == UserRole.CLIENT
+
+
+def owns_provider(user, provider) -> bool:
+    try:
+        return bool(user and user.is_authenticated and user.provider_profile.id == provider.id)
+    except (AttributeError, ObjectDoesNotExist):
+        return False
+
+
+def can_access_provider(user, provider) -> bool:
+    return is_admin(user) or owns_provider(user, provider)
+
+
+def can_access_property(user, property_obj) -> bool:
+    return can_access_provider(user, getattr(property_obj, "provider", None))
 
 
 GYM_STAFF_GROUPS = ('Admin', 'Super Admin', 'Reception')

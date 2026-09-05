@@ -23,9 +23,9 @@ class IsAdminRole(BasePermission):
 
 
 def assert_can_view_booking(user, booking: Booking) -> None:
-    role = get_user_role(user)
-    if role == UserRole.ADMIN:
+    if is_admin(user):
         return
+    role = get_user_role(user)
     if role == UserRole.PROVIDER and booking.provider_id == getattr(
         getattr(user, "provider_profile", None), "id", None
     ):
@@ -38,9 +38,9 @@ def assert_can_view_booking(user, booking: Booking) -> None:
 
 
 def assert_can_manage_booking(user, booking: Booking) -> None:
-    role = get_user_role(user)
-    if role == UserRole.ADMIN:
+    if is_admin(user):
         return
+    role = get_user_role(user)
     if role == UserRole.PROVIDER and booking.provider_id == getattr(
         getattr(user, "provider_profile", None), "id", None
     ):
@@ -54,9 +54,9 @@ def assert_admin(user) -> None:
 
 
 def can_record_payment(user, booking: Booking) -> bool:
-    role = get_user_role(user)
-    if role == UserRole.ADMIN:
+    if is_admin(user):
         return True
+    role = get_user_role(user)
     if role == UserRole.PROVIDER and booking.provider_id == getattr(
         getattr(user, "provider_profile", None), "id", None
     ):

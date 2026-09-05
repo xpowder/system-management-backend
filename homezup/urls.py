@@ -17,26 +17,26 @@ from core.views import (
     media_file,
     spa_index,
 )
+from homezup.checks import ninja_docs_urls  # docs stay off in production
 
-from bookings.controllers import (
-    AuthController,
-    BookingController,
-    ClientBookingController,
-    DashboardReportController,
-    PropertyAvailabilityController,
-)
+from bookings.controllers import AuthController
 from bookings.exceptions import BookingError
 from fitness.controllers import router as fitness_router
 from users.controllers import router as users_router
 
 logger = logging.getLogger("flexoper.request")
 
+_docs_url, _openapi_url = ninja_docs_urls(
+    settings.DEBUG,
+    testing=getattr(settings, "TESTING", False),
+)
+
 api = NinjaExtraAPI(
     title="FlexOper API",
     description="Gym desk API for members, memberships, payments, and attendance.",
     version="1.0.0",
-    docs_url="/docs",
-    openapi_url="/openapi.json",
+    docs_url=_docs_url,
+    openapi_url=_openapi_url,
 )
 
 
@@ -63,13 +63,7 @@ def unhandled_api_error(request, exc: Exception):
     )
 
 
-api.register_controllers(
-    AuthController,
-    BookingController,
-    DashboardReportController,
-    PropertyAvailabilityController,
-    ClientBookingController,
-)
+api.register_controllers(AuthController)
 api.add_router("", users_router)
 api.add_router("", fitness_router)
 

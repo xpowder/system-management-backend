@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from bookings.models import Booking, BookingPayment, BookingStatus, PaymentStatus
 from users.models import ClientProfile, Property, ProviderProfile, UserRole
-from users.permissions import get_user_role
+from users.permissions import get_user_role, is_admin
 
 
 def get_bookings(
@@ -48,9 +48,9 @@ def get_bookings(
 
 
 def apply_user_scope(queryset: QuerySet, user) -> QuerySet:
-    role = get_user_role(user)
-    if role == UserRole.ADMIN:
+    if is_admin(user):
         return queryset
+    role = get_user_role(user)
     if role == UserRole.PROVIDER:
         return queryset.filter(provider=user.provider_profile)
     if role == UserRole.CLIENT:

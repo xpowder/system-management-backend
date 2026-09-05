@@ -1,15 +1,17 @@
 """Django Ninja Extra controllers for local booking management."""
+import re
 from datetime import date
 from decimal import Decimal
 from typing import List, Optional
 
+from django.conf import settings
 from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
-from django.core.cache import cache
 from ninja.errors import HttpError
 from ninja_extra import ControllerBase, api_controller, http_get, http_patch, http_post
 
 from core.auth import session_auth
-
+from core.lockout import clear_account_failures, is_blocked, record_failure
+from core.sessions import flush_user_sessions
 from bookings.exceptions import BookingError
 from bookings.exports import (
     export_bookings_csv,
@@ -68,22 +70,31 @@ from bookings.services import (
     update_booking_statuses,
 )
 from users.models import ClientProfile, Property, ProviderProfile
-from users.permissions import is_admin
+from users.passwords import require_strong_password
+from users.permissions import can_access_property, is_admin
 from users.schemas import AccountProfileUpdateIn, LoginIn, MeOut, PasswordChangeIn
 from users.models import StaffProfile
 
 
 ERROR_RESPONSE = {400: ErrorOut, 403: ErrorOut, 404: ErrorOut}
-LOGIN_FAIL_LIMIT = 10
-LOGIN_FAIL_WINDOW = 15 * 60
+
+
+_IP_RE = re.compile(r"^[0-9a-fA-F.:]{3,45}$")
 
 
 def _client_ip(request):
-    return request.META.get('REMOTE_ADDR') or 'unknown'
-
-
-def _login_fail_key(request, username=''):
-    return f'login-fail:{_client_ip(request)}:{username.lower()}'
+    """Use the original client IP on Railway; ignore spoofed X-Forwarded-For locally."""
+    candidates = []
+    trust_proxy = bool(getattr(settings, "USE_HTTPS", False) or getattr(settings, "ON_RAILWAY", False))
+    if trust_proxy:
+        forwarded = (request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",")[0].strip()
+        if forwarded:
+            candidates.append(forwarded)
+    candidates.append(request.META.get("REMOTE_ADDR") or "")
+    for value in candidates:
+        if value and _IP_RE.match(value):
+            return value
+    return "unknown"
 
 
 def _http_error(exc: BookingError) -> None:
@@ -102,9 +113,8 @@ class AuthController(ControllerBase):
     @http_post("/login", response={200: MeOut, 401: ErrorOut, 429: ErrorOut}, auth=None)
     def login_view(self, payload: LoginIn):
         request = self.context.request
-        fail_key = _login_fail_key(request, payload.username)
-        failures = int(cache.get(fail_key) or 0)
-        if failures >= LOGIN_FAIL_LIMIT:
+        ip = _client_ip(request)
+        if is_blocked(ip, payload.username):
             raise HttpError(429, "Too many login attempts. Try again later.")
         user = authenticate(
             request,
@@ -112,9 +122,11 @@ class AuthController(ControllerBase):
             password=payload.password,
         )
         if not user:
-            cache.set(fail_key, failures + 1, LOGIN_FAIL_WINDOW)
+            record_failure(ip, payload.username)
+            if is_blocked(ip, payload.username):
+                raise HttpError(429, "Too many login attempts. Try again later.")
             raise HttpError(401, "Invalid username or password.")
-        cache.delete(fail_key)
+        clear_account_failures(ip, payload.username)
         login(request, user)
         return MeOut.from_user(user)
 
@@ -143,11 +155,12 @@ class AuthController(ControllerBase):
         user = self.context.request.user
         if not user.check_password(payload.current_password):
             raise HttpError(400, 'Current password is incorrect.')
-        if len(payload.new_password) < 8:
-            raise HttpError(400, 'Password must contain at least 8 characters.')
+        require_strong_password(payload.new_password, user=user)
         user.set_password(payload.new_password)
         user.save(update_fields=['password'])
-        update_session_auth_hash(self.context.request, user)
+        request = self.context.request
+        update_session_auth_hash(request, user)
+        flush_user_sessions(user, keep_session_key=request.session.session_key)
         return MeOut.from_user(user)
 
 
@@ -429,6 +442,8 @@ class PropertyAvailabilityController(ControllerBase):
             property_obj = Property.objects.get(id=property_id)
         except Property.DoesNotExist:
             raise HttpError(404, "Property not found.")
+        if not can_access_property(self.context.request.user, property_obj):
+            raise HttpError(403, "You do not have permission to access this property.")
 
         today = date.today()
         start = start_date or today.replace(day=1)
@@ -459,6 +474,8 @@ class PropertyAvailabilityController(ControllerBase):
             property_obj = Property.objects.get(id=property_id)
         except Property.DoesNotExist:
             raise HttpError(404, "Property not found.")
+        if not can_access_property(self.context.request.user, property_obj):
+            raise HttpError(403, "You do not have permission to access this property.")
         queryset = apply_user_scope(
             get_property_bookings(property_obj),
             self.context.request.user,
@@ -469,6 +486,8 @@ class PropertyAvailabilityController(ControllerBase):
     def preview(self, property_id: int, start_date: date, end_date: date):
         try:
             property_obj = Property.objects.get(id=property_id)
+            if not can_access_property(self.context.request.user, property_obj):
+                raise HttpError(403, "You do not have permission to access this property.")
             months = calculate_booking_months(start_date, end_date)
             total = calculate_booking_price(property_obj.monthly_price, months)
             return {

@@ -6,7 +6,7 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 
-from homezup.checks import DEV_SECRET, cache_settings, debug_default, production_misconfigurations
+from homezup.checks import DEV_SECRET, cache_settings, debug_default, ninja_docs_urls, production_misconfigurations
 from homezup.origins import merge_frontend_origin, uses_cross_site_cookies
 
 
@@ -33,6 +33,24 @@ class SpaAndDeliveryTests(TestCase):
     def test_api_docs_are_public(self):
         response = self.client.get("/api/docs")
         self.assertEqual(response.status_code, 200)
+
+    def test_docs_urls_are_off_outside_debug(self):
+        self.assertEqual(ninja_docs_urls(True), ("/docs", "/openapi.json"))
+        self.assertEqual(ninja_docs_urls(False, testing=True), ("/docs", "/openapi.json"))
+        self.assertEqual(ninja_docs_urls(False), (None, None))
+
+    @override_settings(
+        DEBUG=False,
+        TESTING=False,
+        FRONTEND_ORIGIN="https://system-management-production-5616.up.railway.app",
+    )
+    def test_production_root_redirects_to_the_frontend(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response["Location"],
+            "https://system-management-production-5616.up.railway.app",
+        )
 
     def test_check_delivery_passes_with_a_staff_user(self):
         User = get_user_model()

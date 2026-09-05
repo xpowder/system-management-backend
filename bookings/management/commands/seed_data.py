@@ -1,7 +1,8 @@
 """
-Management command to seed initial data for testing.
+Management command to seed initial data for local testing.
 """
-from django.core.management.base import BaseCommand
+from django.conf import settings
+from django.core.management.base import BaseCommand, CommandError
 from django.contrib.auth.models import User
 from users.models import ClientProfile, ProviderProfile, Property
 from bookings.models import Booking, BookingStatus, PaymentStatus
@@ -14,10 +15,12 @@ class Command(BaseCommand):
     help = 'Seeds the database with sample data for testing'
     
     def handle(self, *args, **options):
+        if not settings.DEBUG:
+            raise CommandError('seed_data is for local DEBUG use only.')
         self.stdout.write(self.style.WARNING('Creating sample data...'))
         
         # Create admin user
-        admin_user, _ = User.objects.get_or_create(
+        admin_user, created = User.objects.get_or_create(
             username='admin',
             defaults={
                 'first_name': 'Admin',
@@ -27,10 +30,12 @@ class Command(BaseCommand):
                 'is_superuser': True
             }
         )
-        if _:
-            admin_user.set_password('admin123')
+        if created:
+            admin_user.set_unusable_password()
             admin_user.save()
-            self.stdout.write(self.style.SUCCESS('Created admin user (username: admin, password: admin123)'))
+            self.stdout.write(self.style.SUCCESS(
+                'Created local admin user with no password. Run: python manage.py changepassword admin'
+            ))
         
         # Create sample clients
         clients = []
@@ -207,7 +212,6 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS('Sample data created successfully!'))
         self.stdout.write(
             self.style.WARNING(
-                'You can now access the admin panel at http://127.0.0.1:8000/admin '
-                'with username "admin" and password "admin123"'
+                'Set the local admin password with: python manage.py changepassword admin'
             )
         )

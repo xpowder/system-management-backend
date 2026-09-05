@@ -6,6 +6,13 @@ def debug_default(on_railway: bool) -> bool:
     return not on_railway
 
 
+def ninja_docs_urls(debug: bool, testing: bool = False) -> tuple:
+    """Public Swagger is a map of every route. Keep it off in production."""
+    if debug or testing:
+        return "/docs", "/openapi.json"
+    return None, None
+
+
 def cache_settings(testing: bool, debug: bool) -> dict:
     """Login lockout must be shared across Gunicorn workers in production."""
     if testing or debug:

@@ -2,7 +2,8 @@ import json
 
 from django.contrib.auth.models import Group, User
 from django.core.cache import cache
-from django.test import TestCase
+from django.test import Client, TestCase, override_settings
+from unittest.mock import patch
 
 from bookings.tests.helpers import make_admin, make_client, make_provider
 from fitness.models import GymNotification
@@ -18,7 +19,6 @@ class UnauthenticatedAccessTests(TestCase):
             ('get', '/api/notifications'),
             ('get', '/api/admin/users'),
             ('get', '/api/clients'),
-            ('get', '/api/bookings'),
             ('post', '/api/fitness/members'),
         ]
         for method, path in paths:
@@ -105,18 +105,16 @@ class ClientProviderIdorTests(TestCase):
         self.assertEqual(own.status_code, 200)
         self.assertEqual(own.json()['id'], self.client_a.id)
 
-    def test_provider_cannot_patch_another_provider(self):
+    def test_provider_http_is_unmounted(self):
         self.client.force_login(self.provider_a.user)
-        response = self.client.patch(
+        self.assertEqual(self.client.get('/api/providers').status_code, 404)
+        self.assertEqual(self.client.get(f'/api/providers/{self.provider_b.id}').status_code, 404)
+        patched = self.client.patch(
             f'/api/providers/{self.provider_b.id}',
             data=json.dumps({'company_name': 'Stolen'}),
             content_type='application/json',
         )
-        self.assertEqual(response.status_code, 403)
-        listed = self.client.get(f'/api/providers/{self.provider_b.id}')
-        self.assertEqual(listed.status_code, 200)
-        self.assertEqual(listed.json()['tax_id'], '')
-        self.assertEqual(listed.json()['user']['email'], '')
+        self.assertEqual(patched.status_code, 404)
 
 
 class NotificationIdorTests(TestCase):
@@ -213,12 +211,126 @@ class LoginThrottleTests(TestCase):
 
     def test_repeated_failures_are_limited(self):
         payload = json.dumps({'username': 'lock-me', 'password': 'wrong'})
-        last = None
-        for _ in range(10):
+        for _ in range(9):
             last = self.client.post('/api/auth/login', data=payload, content_type='application/json')
             self.assertEqual(last.status_code, 401)
         blocked = self.client.post('/api/auth/login', data=payload, content_type='application/json')
         self.assertEqual(blocked.status_code, 429)
+
+    def test_successful_login_clears_failures(self):
+        wrong = json.dumps({'username': 'lock-me', 'password': 'wrong'})
+        for _ in range(5):
+            self.assertEqual(
+                self.client.post('/api/auth/login', data=wrong, content_type='application/json').status_code,
+                401,
+            )
+        ok = self.client.post(
+            '/api/auth/login',
+            data=json.dumps({'username': 'lock-me', 'password': 'correct-password'}),
+            content_type='application/json',
+        )
+        self.assertEqual(ok.status_code, 200)
+        self.client.post('/api/auth/logout')
+        again = self.client.post('/api/auth/login', data=wrong, content_type='application/json')
+        self.assertEqual(again.status_code, 401)
+
+    def test_lockout_recovers_when_the_counter_expires(self):
+        payload = json.dumps({'username': 'lock-me', 'password': 'wrong'})
+        for _ in range(10):
+            self.client.post('/api/auth/login', data=payload, content_type='application/json')
+        self.assertEqual(
+            self.client.post('/api/auth/login', data=payload, content_type='application/json').status_code,
+            429,
+        )
+        cache.clear()
+        recovered = self.client.post('/api/auth/login', data=payload, content_type='application/json')
+        self.assertEqual(recovered.status_code, 401)
+
+    def test_failure_counter_increments_for_concurrent_style_calls(self):
+        from core.lockout import account_key, record_failure
+
+        record_failure('127.0.0.1', 'lock-me')
+        record_failure('127.0.0.1', 'lock-me')
+        self.assertEqual(int(cache.get(account_key('127.0.0.1', 'lock-me'))), 2)
+
+    def test_other_staff_are_not_locked_by_one_username(self):
+        User.objects.create_user(username='other-desk', password='correct-password', is_staff=True)
+        payload = json.dumps({'username': 'lock-me', 'password': 'wrong'})
+        for _ in range(10):
+            self.client.post('/api/auth/login', data=payload, content_type='application/json')
+        other = self.client.post(
+            '/api/auth/login',
+            data=json.dumps({'username': 'other-desk', 'password': 'wrong'}),
+            content_type='application/json',
+        )
+        self.assertEqual(other.status_code, 401)
+
+    @patch('core.lockout.IP_LIMIT', 3)
+    def test_ip_spray_is_limited_without_permanent_lock(self):
+        for index in range(3):
+            User.objects.create_user(username=f'spray-{index}', password='correct-password', is_staff=True)
+            response = self.client.post(
+                '/api/auth/login',
+                data=json.dumps({'username': f'spray-{index}', 'password': 'wrong'}),
+                content_type='application/json',
+            )
+            self.assertIn(response.status_code, (401, 429))
+        blocked = self.client.post(
+            '/api/auth/login',
+            data=json.dumps({'username': 'lock-me', 'password': 'wrong'}),
+            content_type='application/json',
+        )
+        self.assertEqual(blocked.status_code, 429)
+        cache.clear()
+        recovered = self.client.post(
+            '/api/auth/login',
+            data=json.dumps({'username': 'lock-me', 'password': 'correct-password'}),
+            content_type='application/json',
+        )
+        self.assertEqual(recovered.status_code, 200)
+
+    def test_spoofed_forwarded_for_does_not_reset_local_lockout(self):
+        payload = json.dumps({'username': 'lock-me', 'password': 'wrong'})
+        for index in range(9):
+            response = self.client.post(
+                '/api/auth/login',
+                data=payload,
+                content_type='application/json',
+                HTTP_X_FORWARDED_FOR=f'203.0.113.{index}',
+            )
+            self.assertEqual(response.status_code, 401)
+        blocked = self.client.post(
+            '/api/auth/login',
+            data=payload,
+            content_type='application/json',
+            HTTP_X_FORWARDED_FOR='198.51.100.10',
+        )
+        self.assertEqual(blocked.status_code, 429)
+
+    @override_settings(USE_HTTPS=True)
+    def test_lockout_behind_a_proxy_is_per_client_ip(self):
+        payload = json.dumps({'username': 'lock-me', 'password': 'wrong'})
+        for _ in range(10):
+            self.client.post(
+                '/api/auth/login',
+                data=payload,
+                content_type='application/json',
+                HTTP_X_FORWARDED_FOR='203.0.113.10',
+            )
+        blocked = self.client.post(
+            '/api/auth/login',
+            data=payload,
+            content_type='application/json',
+            HTTP_X_FORWARDED_FOR='203.0.113.10',
+        )
+        other = self.client.post(
+            '/api/auth/login',
+            data=payload,
+            content_type='application/json',
+            HTTP_X_FORWARDED_FOR='203.0.113.20',
+        )
+        self.assertEqual(blocked.status_code, 429)
+        self.assertEqual(other.status_code, 401)
 
 
 class InactiveSessionTests(TestCase):
@@ -323,6 +435,38 @@ class AuthenticationInputTests(TestCase):
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password('correct-password'))
 
+    def test_password_change_rejects_a_common_password(self):
+        self.client.force_login(self.user)
+        response = self.client.post(
+            '/api/auth/password',
+            data=json.dumps({
+                'current_password': 'correct-password',
+                'new_password': 'password123',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('correct-password'))
+
+    def test_password_change_invalidates_other_sessions(self):
+        other = Client()
+        self.client.force_login(self.user)
+        other.force_login(self.user)
+        self.assertEqual(self.client.get('/api/auth/me').status_code, 200)
+        self.assertEqual(other.get('/api/auth/me').status_code, 200)
+        changed = self.client.post(
+            '/api/auth/password',
+            data=json.dumps({
+                'current_password': 'correct-password',
+                'new_password': 'DeskPass-2026!',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(changed.status_code, 200)
+        self.assertEqual(self.client.get('/api/auth/me').status_code, 200)
+        self.assertEqual(other.get('/api/auth/me').status_code, 401)
+
 
 class CrashAndInjectionTests(TestCase):
     def setUp(self):
@@ -377,35 +521,18 @@ class CrashAndInjectionTests(TestCase):
         self.assertEqual(response.status_code, 409)
 
 
-class BookingIdorTests(TestCase):
-    def setUp(self):
-        from datetime import date
-
-        from bookings.services import create_booking
-        from bookings.tests.helpers import make_client, make_property, make_provider
-
-        self.client_a = make_client(username='book-client-a', phone='0610000001')
-        self.client_b = make_client(username='book-client-b', phone='0610000002')
-        self.provider = make_provider(username='book-prov')
-        self.property = make_property(self.provider)
-        self.booking_b = create_booking(
-            client=self.client_b,
-            property_obj=self.property,
-            start_date=date(2026, 10, 1),
-            end_date=date(2026, 11, 1),
-        )
-
-    def test_client_cannot_read_another_clients_booking(self):
-        self.client.force_login(self.client_a.user)
-        detail = self.client.get(f'/api/bookings/{self.booking_b.id}')
-        payments = self.client.get(f'/api/bookings/{self.booking_b.id}/payments')
-        other_list = self.client.get(f'/api/clients/{self.client_b.id}/bookings')
-        filtered = self.client.get('/api/bookings', {'client_id': self.client_b.id})
-        self.assertEqual(detail.status_code, 403)
-        self.assertEqual(payments.status_code, 403)
-        self.assertEqual(other_list.status_code, 403)
-        self.assertEqual(filtered.status_code, 200)
-        self.assertEqual(filtered.json(), [])
+class BookingApiPausedTests(TestCase):
+    def test_booking_http_apis_are_unavailable(self):
+        staff = User.objects.create_user(username='book-paused', password='password123', is_staff=True)
+        self.client.force_login(staff)
+        for path in (
+            '/api/bookings',
+            '/api/dashboard',
+            '/api/providers',
+            '/api/properties',
+            '/api/reports/revenue',
+        ):
+            self.assertEqual(self.client.get(path).status_code, 404, path)
 
 
 class RoleBoundaryTests(TestCase):
@@ -454,6 +581,28 @@ class RoleBoundaryTests(TestCase):
         self.client.force_login(self.member_user)
         response = self.client.get('/admin/')
         self.assertIn(response.status_code, (302, 403))
+
+    def test_named_admin_group_can_use_staff_admin_api(self):
+        staff = User.objects.create_user(username='group-admin', password='password123', is_staff=True)
+        Group.objects.get_or_create(name='Admin')[0].user_set.add(staff)
+        self.client.force_login(staff)
+        self.assertEqual(self.client.get('/api/admin/users').status_code, 200)
+
+    def test_staff_cannot_open_django_admin(self):
+        staff = User.objects.create_user(username='role-staff', password='password123', is_staff=True)
+        self.client.force_login(staff)
+        response = self.client.get('/admin/')
+        self.assertIn(response.status_code, (302, 403))
+
+    def test_superuser_can_open_django_admin(self):
+        superuser = User.objects.create_superuser(
+            username='role-super',
+            email='role-super@example.com',
+            password='password123',
+        )
+        self.client.force_login(superuser)
+        response = self.client.get('/admin/')
+        self.assertEqual(response.status_code, 200)
 
 
 class CorsAndSecretExposureTests(TestCase):

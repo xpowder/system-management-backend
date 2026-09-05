@@ -4,6 +4,8 @@ from django.contrib.auth.models import User
 from django.contrib.auth.models import Group
 from django.test import TestCase
 
+STRONG_PASSWORD = 'DeskPass-2026!'
+
 
 class AdminUserApiTest(TestCase):
 	def setUp(self):
@@ -18,7 +20,7 @@ class AdminUserApiTest(TestCase):
 		self.client.force_login(self.admin)
 		create = self.client.post('/api/admin/users', data=json.dumps({
 			'username': 'new-user',
-			'password': 'password123',
+			'password': STRONG_PASSWORD,
 			'first_name': 'New',
 			'last_name': 'User',
 			'email': 'new@example.com',
@@ -39,14 +41,27 @@ class AdminUserApiTest(TestCase):
 		self.assertEqual(update.json()['role'], 'Trainer')
 
 		password_update = self.client.patch(f'/api/admin/users/{user_id}', data=json.dumps({
-			'password': 'new-password-123',
+			'password': 'DeskPass-2027!',
 		}), content_type='application/json')
 		self.assertEqual(password_update.status_code, 200)
-		self.assertTrue(User.objects.get(id=user_id).check_password('new-password-123'))
+		self.assertTrue(User.objects.get(id=user_id).check_password('DeskPass-2027!'))
 
 		delete = self.client.delete(f'/api/admin/users/{user_id}')
 		self.assertEqual(delete.status_code, 200)
 		self.assertFalse(User.objects.filter(id=user_id).exists())
+
+	def test_weak_staff_password_is_rejected(self):
+		self.client.force_login(self.admin)
+		create = self.client.post('/api/admin/users', data=json.dumps({
+			'username': 'weak-user',
+			'password': 'password123',
+			'first_name': 'Weak',
+			'last_name': 'User',
+			'email': 'weak@example.com',
+			'role': 'Reception',
+		}), content_type='application/json')
+		self.assertEqual(create.status_code, 400)
+		self.assertFalse(User.objects.filter(username='weak-user').exists())
 
 	def test_staff_cannot_delete_own_account(self):
 		self.client.force_login(self.admin)
@@ -83,7 +98,7 @@ class AdminUserApiTest(TestCase):
 		self.client.force_login(self.admin)
 		create = self.client.post('/api/admin/users', data=json.dumps({
 			'username': 'hashed-user',
-			'password': 'password123',
+			'password': STRONG_PASSWORD,
 			'first_name': 'Hash',
 			'last_name': 'User',
 			'email': 'hash@example.com',
@@ -91,8 +106,8 @@ class AdminUserApiTest(TestCase):
 		}), content_type='application/json')
 		self.assertEqual(create.status_code, 200)
 		stored = User.objects.get(username='hashed-user')
-		self.assertNotEqual(stored.password, 'password123')
-		self.assertTrue(stored.check_password('password123'))
+		self.assertNotEqual(stored.password, STRONG_PASSWORD)
+		self.assertTrue(stored.check_password(STRONG_PASSWORD))
 		self.assertNotIn('password', create.json())
 
 	def test_superuser_can_access_administration(self):

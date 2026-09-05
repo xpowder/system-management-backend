@@ -2,12 +2,14 @@ import json
 from datetime import date
 
 from django.test import TestCase
+from unittest import skip
 
 from bookings.models import BookingStatus, PaymentStatus
 from bookings.services import create_booking
 from bookings.tests.helpers import make_admin, make_client, make_property, make_provider
 
 
+@skip("Booking HTTP APIs are paused")
 class BookingApiFlowTest(TestCase):
     def setUp(self):
         self.admin = make_admin()
