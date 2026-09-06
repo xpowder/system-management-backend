@@ -435,10 +435,10 @@ def build_cash_log_xlsx(year, month, label, rows, total):
     sheet = workbook.active
     sheet.title = 'Cash log'
 
-    title_font = Font(name='Calibri', bold=True, size=16, color='172126')
-    note_font = Font(name='Calibri', italic=True, size=10, color='6B7C78')
-    header_font = Font(name='Calibri', bold=True, color='FFFFFF', size=11)
-    header_fill = PatternFill('solid', fgColor='172126')
+    title_font = Font(name='Calibri', bold=True, size=16, color='FF172126')
+    note_font = Font(name='Calibri', italic=True, size=10, color='FF6B7C78')
+    header_font = Font(name='Calibri', bold=True, color='FF172126', size=11)
+    header_fill = PatternFill(fill_type='solid', fgColor='FFE4EBE7')
     sheet['A1'] = COMPANY
     sheet['A1'].font = title_font
     sheet['A2'] = f'Cash desk log — {label}'
@@ -515,17 +515,28 @@ def build_cash_log_pdf(year, month, label, rows, total):
         textColor=colors.HexColor('#172126'),
         leading=11,
     )
+    header_cell = ParagraphStyle(
+        'CashHeader',
+        parent=styles['Normal'],
+        fontName=bold,
+        fontSize=8,
+        textColor=colors.white,
+        leading=11,
+    )
 
     def text(value):
         return Paragraph(str(value or '').replace('&', '&amp;'), cell)
 
+    def header(value):
+        return Paragraph(str(value or '').replace('&', '&amp;'), header_cell)
+
     table_rows = [[
-        text('Receipt'),
-        text('Date'),
-        text('Member'),
-        text('Amount'),
-        text('Received by'),
-        text('Notes'),
+        header('Receipt'),
+        header('Date'),
+        header('Member'),
+        header('Amount'),
+        header('Received by'),
+        header('Notes'),
     ]]
     for row in rows:
         table_rows.append([

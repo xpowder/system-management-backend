@@ -260,6 +260,19 @@ curl -X POST http://127.0.0.1:8000/api/fitness/classes/1/members \
    -H "Content-Type: application/json" \
    -d '{"client_id":1}'
 
+# Weekly class calendar (gym staff session). Reception, Admin, Super Admin, or is_staff.
+# Anonymous 401. Gym member / Trainer group 403.
+# `from` and `to` are required YYYY-MM-DD (inclusive, max 62 days).
+# Times are Africa/Casablanca wall clock. Recurrence is every matching weekday
+# while the schedule and class are active. `member_count` is the class roster,
+# not session capacity. Trainer pay is never included.
+curl "http://127.0.0.1:8000/api/fitness/classes/calendar?from=2026-09-01&to=2026-09-30"
+
+# Create a weekly schedule (Admin / Super Admin / is_staff). Reception 403.
+curl -X POST http://127.0.0.1:8000/api/fitness/classes/schedules \
+   -H "Content-Type: application/json" \
+   -d '{"training_class_id":1,"weekday":"monday","start_time":"18:00:00","end_time":"19:00:00","location":"Ring 1","capacity":12}'
+
 # Member 360 (gym staff session). Reception, Admin, Super Admin, or is_staff.
 # Anonymous 401. Gym member / Trainer group 403. Missing member 404.
 # Empty memberships/payments/attendance return [] and reminder is null.

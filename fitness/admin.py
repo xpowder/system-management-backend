@@ -1,12 +1,19 @@
 from django.contrib import admin
 
-from fitness.models import Attendance, ClassMember, GymExpense, GymPayment, Membership, MembershipPlan, Trainer, TrainerPayroll, TrainingClass
+from fitness.models import Attendance, ClassMember, ClassSchedule, GymExpense, GymPayment, Membership, MembershipPlan, Trainer, TrainerPayroll, TrainingClass
 
 
 class ClassMemberInline(admin.TabularInline):
     model = ClassMember
     extra = 0
     readonly_fields = ('joined_at',)
+
+
+class ClassScheduleInline(admin.TabularInline):
+    model = ClassSchedule
+    extra = 0
+    autocomplete_fields = ('trainer',)
+    fields = ('weekday', 'start_time', 'end_time', 'trainer', 'location', 'capacity', 'is_active')
 
 
 @admin.register(TrainingClass)
@@ -18,7 +25,7 @@ class TrainingClassAdmin(admin.ModelAdmin):
     list_filter = ('class_type', 'is_active')
     search_fields = ('name', 'members__client__user__first_name', 'members__client__user__last_name')
     readonly_fields = ('member_count_display', 'team_total_display', 'created_at', 'updated_at')
-    inlines = (ClassMemberInline,)
+    inlines = (ClassMemberInline, ClassScheduleInline,)
     fieldsets = (
         ('Class', {'fields': ('name', 'class_type', 'is_active')}),
         ('Pricing', {'fields': ('price_per_member', 'member_count_display', 'team_total_display')}),
@@ -32,6 +39,18 @@ class TrainingClassAdmin(admin.ModelAdmin):
     @admin.display(description='Team total (MAD)')
     def team_total_display(self, obj):
         return f'{obj.team_total:.2f} MAD'
+
+
+@admin.register(ClassSchedule)
+class ClassScheduleAdmin(admin.ModelAdmin):
+    list_display = (
+        'training_class', 'weekday', 'start_time', 'end_time',
+        'trainer', 'location', 'capacity', 'is_active',
+    )
+    list_filter = ('weekday', 'is_active', 'training_class')
+    search_fields = ('training_class__name', 'location', 'trainer__first_name', 'trainer__last_name')
+    autocomplete_fields = ('training_class', 'trainer')
+    readonly_fields = ('created_at', 'updated_at')
 
 
 @admin.register(ClassMember)

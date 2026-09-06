@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import List, Optional
 
@@ -23,6 +23,58 @@ class TrainingClassOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ClassScheduleIn(BaseModel):
+    training_class_id: int
+    weekday: str
+    start_time: time
+    end_time: time
+    trainer_id: Optional[int] = None
+    location: str = ''
+    capacity: Optional[int] = Field(default=None, ge=1)
+    is_active: bool = True
+
+
+class ClassScheduleOut(BaseModel):
+    id: int
+    training_class_id: int
+    class_name: str
+    class_type: str
+    weekday: str
+    start_time: time
+    end_time: time
+    trainer_id: Optional[int] = None
+    trainer_name: Optional[str] = None
+    location: str = ''
+    capacity: Optional[int] = None
+    is_active: bool
+
+
+class CalendarOccurrenceOut(BaseModel):
+    schedule_id: int
+    training_class_id: int
+    class_name: str
+    class_type: str
+    date: date
+    weekday: str
+    start_time: time
+    end_time: time
+    starts_at: datetime
+    ends_at: datetime
+    trainer_id: Optional[int] = None
+    trainer_name: Optional[str] = None
+    location: str = ''
+    capacity: Optional[int] = None
+    member_count: int
+    is_active: bool
+
+
+class ClassCalendarOut(BaseModel):
+    start_date: date
+    end_date: date
+    timezone: str
+    items: List[CalendarOccurrenceOut]
 
 
 class ClassRevenueOut(BaseModel):

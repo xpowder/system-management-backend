@@ -6,7 +6,7 @@ from urllib.parse import quote
 import re
 import uuid
 
-from ninja import Router
+from ninja import Query, Router
 from ninja.errors import HttpError
 
 from django.contrib.auth.models import User
@@ -18,9 +18,10 @@ from django.utils import timezone
 from core.auth import gym_staff_auth
 from fitness.attendance import attendance_data, class_headcount, desk_member, list_today_visits, lookup_members, member_card_code, open_visit_today, qr_response, require_checkin_member
 from fitness.exports import cash_log_pdf_response, cash_log_xlsx_response, monthly_pdf_response, monthly_xlsx_response
-from fitness.models import Attendance, ClassMember, ExpenseCategory, FitnessClassType, GymExpense, GymNotification, GymNotificationSettings, GymPayment, GymWhatsAppReminder, Membership, MembershipPlan, PaymentStatusOverride, Trainer, TrainerPayroll, TrainingClass
+from fitness.models import Attendance, ClassMember, ClassSchedule, ExpenseCategory, FitnessClassType, GymExpense, GymNotification, GymNotificationSettings, GymPayment, GymWhatsAppReminder, Membership, MembershipPlan, PaymentStatusOverride, Trainer, TrainerPayroll, TrainingClass
 from fitness.receipts import receipt_html_response, receipt_number, receipt_pdf_response
-from fitness.schemas import AttendanceCheckOutIn, AttendanceDeskOut, AttendanceIn, AttendanceLookupOut, AttendanceOut, ClassMemberIn, ClassMemberOut, ClassRevenueReportOut, ExpenseCategoryTotalOut, GymExpenseIn, GymExpenseOut, GymPaymentIn, GymPaymentOut, Member360Out, MemberClassIn, MemberClassOut, MemberIn, MemberOut, MembershipIn, MembershipOut, MembershipPriceIn, MembershipRemainingIn, MonthlyOverviewOut, NotificationOut, NotificationSettingsIn, NotificationSettingsOut, PaymentStatusUpdateIn, PlanIn, PlanOut, TrainerIn, TrainerOut, TrainerPayrollIn, TrainerPayrollReportOut, TrainingClassIn, TrainingClassOut, WhatsAppReminderListOut, WhatsAppReminderOut, WhatsAppReminderSentIn
+from fitness.schedules import calendar_items, parse_calendar_bounds, parse_weekday, weekday_name, weekdays_in_range
+from fitness.schemas import AttendanceCheckOutIn, AttendanceDeskOut, AttendanceIn, AttendanceLookupOut, AttendanceOut, ClassCalendarOut, ClassMemberIn, ClassMemberOut, ClassRevenueReportOut, ClassScheduleIn, ClassScheduleOut, ExpenseCategoryTotalOut, GymExpenseIn, GymExpenseOut, GymPaymentIn, GymPaymentOut, Member360Out, MemberClassIn, MemberClassOut, MemberIn, MemberOut, MembershipIn, MembershipOut, MembershipPriceIn, MembershipRemainingIn, MonthlyOverviewOut, NotificationOut, NotificationSettingsIn, NotificationSettingsOut, PaymentStatusUpdateIn, PlanIn, PlanOut, TrainerIn, TrainerOut, TrainerPayrollIn, TrainerPayrollReportOut, TrainingClassIn, TrainingClassOut, WhatsAppReminderListOut, WhatsAppReminderOut, WhatsAppReminderSentIn
 from users.models import ClientProfile
 from users.permissions import is_admin
 
@@ -306,6 +307,65 @@ def _get_training_class(class_id):
         raise HttpError(404, 'Fitness class not found')
 
 
+def _schedule_queryset():
+    return ClassSchedule.objects.select_related('training_class', 'trainer')
+
+
+def _get_class_schedule(schedule_id):
+    try:
+        return _schedule_queryset().get(id=schedule_id)
+    except ClassSchedule.DoesNotExist:
+        raise HttpError(404, 'Class schedule not found')
+
+
+def _resolve_schedule_trainer(trainer_id):
+    if trainer_id is None:
+        return None
+    try:
+        return Trainer.objects.get(id=trainer_id)
+    except Trainer.DoesNotExist:
+        raise HttpError(404, 'Trainer not found')
+
+
+def schedule_data(schedule):
+    trainer = schedule.trainer
+    return {
+        'id': schedule.id,
+        'training_class_id': schedule.training_class_id,
+        'class_name': schedule.training_class.name,
+        'class_type': schedule.training_class.class_type,
+        'weekday': weekday_name(schedule.weekday),
+        'start_time': schedule.start_time,
+        'end_time': schedule.end_time,
+        'trainer_id': trainer.id if trainer else None,
+        'trainer_name': trainer.name if trainer else None,
+        'location': schedule.location or '',
+        'capacity': schedule.capacity,
+        'is_active': schedule.is_active,
+    }
+
+
+def _apply_schedule_payload(schedule, payload):
+    if payload.end_time <= payload.start_time:
+        raise HttpError(400, 'end_time must be after start_time')
+    if payload.capacity is not None and payload.capacity < 1:
+        raise HttpError(400, 'capacity must be at least 1')
+    schedule.training_class = _get_training_class(payload.training_class_id)
+    schedule.weekday = parse_weekday(payload.weekday)
+    schedule.start_time = payload.start_time
+    schedule.end_time = payload.end_time
+    schedule.trainer = _resolve_schedule_trainer(payload.trainer_id)
+    schedule.location = (payload.location or '').strip()
+    schedule.capacity = payload.capacity
+    schedule.is_active = payload.is_active
+    try:
+        with transaction.atomic():
+            schedule.save()
+    except IntegrityError:
+        raise HttpError(400, 'Invalid class schedule')
+    return schedule
+
+
 def _plan_queryset():
     return MembershipPlan.objects.annotate(member_count=Count('memberships__member', distinct=True))
 
@@ -349,6 +409,68 @@ def _apply_plan_payload(plan, payload):
 @router.get('/fitness/classes', response=List[TrainingClassOut])
 def list_classes(request):
     return [class_data(item) for item in TrainingClass.objects.prefetch_related('members__client')]
+
+
+@router.get('/fitness/classes/calendar', response=ClassCalendarOut)
+def class_calendar(
+    request,
+    from_: Optional[str] = Query(None, alias='from'),
+    to: Optional[str] = None,
+):
+    start, end = parse_calendar_bounds(from_, to)
+    queryset = ClassSchedule.objects.filter(
+        is_active=True,
+        training_class__is_active=True,
+    ).select_related('training_class', 'trainer').annotate(
+        roster_count=Count(
+            'training_class__members',
+            filter=Q(
+                training_class__members__is_active=True,
+                training_class__members__client__is_active=True,
+            ),
+        ),
+    )
+    weekdays = weekdays_in_range(start, end)
+    if weekdays is not None:
+        queryset = queryset.filter(weekday__in=weekdays)
+    return {
+        'start_date': start,
+        'end_date': end,
+        'timezone': timezone.get_current_timezone_name(),
+        'items': calendar_items(queryset, start, end),
+    }
+
+
+@router.get('/fitness/classes/schedules', response=List[ClassScheduleOut])
+def list_class_schedules(request, training_class_id: Optional[int] = None):
+    queryset = _schedule_queryset()
+    if training_class_id is not None:
+        queryset = queryset.filter(training_class_id=training_class_id)
+    return [schedule_data(item) for item in queryset]
+
+
+@router.post('/fitness/classes/schedules', response=ClassScheduleOut)
+def create_class_schedule(request, payload: ClassScheduleIn):
+    _require_gym_admin(request)
+    return schedule_data(_apply_schedule_payload(ClassSchedule(), payload))
+
+
+@router.get('/fitness/classes/schedules/{schedule_id}', response=ClassScheduleOut)
+def get_class_schedule(request, schedule_id: int):
+    return schedule_data(_get_class_schedule(schedule_id))
+
+
+@router.put('/fitness/classes/schedules/{schedule_id}', response=ClassScheduleOut)
+def update_class_schedule(request, schedule_id: int, payload: ClassScheduleIn):
+    _require_gym_admin(request)
+    return schedule_data(_apply_schedule_payload(_get_class_schedule(schedule_id), payload))
+
+
+@router.delete('/fitness/classes/schedules/{schedule_id}')
+def delete_class_schedule(request, schedule_id: int):
+    _require_gym_admin(request)
+    _get_class_schedule(schedule_id).delete()
+    return {'success': True}
 
 
 @router.post('/fitness/classes', response=TrainingClassOut)
@@ -603,13 +725,28 @@ def morocco_whatsapp_number(phone: str) -> str:
 
 
 def reminder_message(name, reasons, end_date, days_left, remaining):
-    first = (name or '').split()[0] or 'bonjour'
+    display_name = (name or '').strip() or 'bonjour'
+    first = display_name.split()[0]
     date_label = end_date.strftime('%d/%m/%Y')
+    days = int(days_left)
+    if days == 0 and ('expiring_soon' in reasons or 'expired' in reasons):
+        message = (
+            f'Bonjour {display_name} 👋\n'
+            '\n'
+            'Petit rappel : votre abonnement à la salle de sport *se termine aujourd’hui*.\n'
+            '\n'
+            'Si vous souhaitez continuer votre entraînement, vous pouvez renouveler votre abonnement directement à la salle.\n'
+            '\n'
+            '💪 Au plaisir de vous revoir !\n'
+            'AUMB'
+        )
+        if 'unpaid' in reasons:
+            message += f'\n\nIl reste {remaining:.2f} MAD à régler.'
+        return message
     parts = [f'Bonjour {first},']
     if 'expiring_soon' in reasons:
-        days = max(int(days_left), 0)
         day_word = 'jour' if days == 1 else 'jours'
-        parts.append(f'votre abonnement expire le {date_label} ({days} {day_word}).')
+        parts.append(f'votre abonnement expire le {date_label} ({max(days, 0)} {day_word}).')
     elif 'expired' in reasons:
         parts.append(f'votre abonnement a expire le {date_label}.')
     if 'unpaid' in reasons:

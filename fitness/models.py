@@ -234,6 +234,59 @@ class Trainer(BaseModel):
         return f'{self.first_name} {self.last_name}'.strip()
 
 
+class Weekday(models.IntegerChoices):
+    MONDAY = 0, 'Monday'
+    TUESDAY = 1, 'Tuesday'
+    WEDNESDAY = 2, 'Wednesday'
+    THURSDAY = 3, 'Thursday'
+    FRIDAY = 4, 'Friday'
+    SATURDAY = 5, 'Saturday'
+    SUNDAY = 6, 'Sunday'
+
+
+class ClassSchedule(BaseModel):
+    """Weekly recurring slot for a training class. Not a single dated session row."""
+
+    training_class = models.ForeignKey(
+        TrainingClass,
+        on_delete=models.CASCADE,
+        related_name='schedules',
+    )
+    weekday = models.PositiveSmallIntegerField(choices=Weekday.choices)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    trainer = models.ForeignKey(
+        Trainer,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='class_schedules',
+    )
+    location = models.CharField(max_length=150, blank=True)
+    capacity = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1)],
+        help_text='Optional maximum places for this slot. Separate from class roster size.',
+    )
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['weekday', 'start_time', 'training_class__name']
+        indexes = [
+            models.Index(fields=['weekday', 'is_active']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(end_time__gt=models.F('start_time')),
+                name='class_schedule_end_after_start',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.training_class} {self.get_weekday_display()} {self.start_time}-{self.end_time}'
+
+
 class TrainerPayroll(BaseModel):
     trainer = models.ForeignKey(Trainer, on_delete=models.CASCADE, related_name='payrolls')
     year = models.PositiveIntegerField()

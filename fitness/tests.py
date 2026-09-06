@@ -1,12 +1,12 @@
 import json
-from datetime import timedelta
+from datetime import time, timedelta
 from decimal import Decimal
 
 from django.contrib.auth.models import Group, User
 from django.test import TestCase
 from django.utils import timezone
 
-from fitness.models import Attendance, ClassMember, FitnessClassType, GymExpense, GymNotification, GymPayment, GymWhatsAppReminder, Membership, MembershipPlan, Trainer, TrainerPayroll, TrainingClass
+from fitness.models import Attendance, ClassMember, ClassSchedule, FitnessClassType, GymExpense, GymNotification, GymPayment, GymWhatsAppReminder, Membership, MembershipPlan, Trainer, TrainerPayroll, TrainingClass
 from fitness.controllers import create_expiring_membership_notifications
 from users.models import ClientProfile
 
@@ -924,6 +924,17 @@ class WhatsAppReminderApiTest(TestCase):
         self.assertTrue(sent.json()['reminded_today'])
         self.assertEqual(GymWhatsAppReminder.objects.filter(membership=self.membership).count(), 1)
 
+    def test_ends_today_uses_month_end_reminder_message(self):
+        Membership.objects.filter(id=self.membership.id).update(end_date=timezone.localdate())
+        body = self.client.get('/api/fitness/reminders').json()
+        self.assertEqual(len(body['items']), 1)
+        message = body['items'][0]['message']
+        self.assertIn('Bonjour Sara Benali', message)
+        self.assertIn('se termine aujourd', message)
+        self.assertIn('renouveler', message)
+        self.assertIn('AUMB', message)
+        self.assertIn('300.00 MAD', message)
+
     def test_skips_paid_active_memberships(self):
         Membership.objects.filter(id=self.membership.id).update(end_date=timezone.localdate() + timedelta(days=20))
         GymPayment.objects.create(membership=self.membership, amount=Decimal('300.00'), received_by='Admin')
@@ -1422,6 +1433,392 @@ class Member360ApiTest(TestCase):
         self.assertEqual(body['attendance'], [])
         self.assertIsNone(body['reminder'])
         self.assertIsNone(body['training_class'])
+
+
+class ClassScheduleCalendarApiTest(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(username='cal-admin', is_staff=True)
+        self.reception = User.objects.create_user(username='cal-reception')
+        Group.objects.get_or_create(name='Reception')[0].user_set.add(self.reception)
+        self.boxing = TrainingClass.objects.create(name='Morning Boxing', class_type=FitnessClassType.BOXING)
+        self.aerobic = TrainingClass.objects.create(name='Aerobic', class_type=FitnessClassType.AEROBIC)
+        self.trainer = Trainer.objects.create(
+            first_name='Karim',
+            last_name='Coach',
+            monthly_pay=Decimal('7777.00'),
+        )
+        member_user = User.objects.create_user(username='cal-roster', first_name='Sara')
+        member = ClientProfile.objects.create(user=member_user, id_number='CAL-001')
+        ClassMember.objects.create(training_class=self.boxing, client=member)
+        self.monday = ClassSchedule.objects.create(
+            training_class=self.boxing,
+            weekday=0,
+            start_time=time(18, 0),
+            end_time=time(19, 0),
+            trainer=self.trainer,
+            location='Ring 1',
+            capacity=12,
+        )
+        self.wednesday = ClassSchedule.objects.create(
+            training_class=self.aerobic,
+            weekday=2,
+            start_time=time(10, 0),
+            end_time=time(11, 0),
+        )
+
+    def _calendar(self, start='2026-09-01', end='2026-09-30'):
+        return self.client.get(f'/api/fitness/classes/calendar?from={start}&to={end}')
+
+    def test_anonymous_gets_401(self):
+        self.assertEqual(self._calendar().status_code, 401)
+
+    def test_gym_member_and_trainer_get_403(self):
+        member_login = User.objects.create_user(username='cal-member', password='password123')
+        ClientProfile.objects.create(user=member_login, id_number='CAL-MEM')
+        self.client.force_login(member_login)
+        self.assertEqual(self._calendar().status_code, 403)
+        trainer_login = User.objects.create_user(username='cal-trainer-login', password='password123')
+        Group.objects.get_or_create(name='Trainer')[0].user_set.add(trainer_login)
+        self.client.force_login(trainer_login)
+        self.assertEqual(self._calendar().status_code, 403)
+
+    def test_reception_and_admin_can_read_calendar(self):
+        self.client.force_login(self.reception)
+        reception = self._calendar()
+        self.assertEqual(reception.status_code, 200)
+        self.assertEqual(self.client.get('/api/fitness/classes/schedules').status_code, 200)
+        self.client.force_login(self.admin)
+        admin = self._calendar()
+        self.assertEqual(admin.status_code, 200)
+        self.assertEqual(admin.json()['timezone'], 'Africa/Casablanca')
+        super_admin = User.objects.create_user(username='cal-super')
+        Group.objects.get_or_create(name='Super Admin')[0].user_set.add(super_admin)
+        self.client.force_login(super_admin)
+        self.assertEqual(self._calendar().status_code, 200)
+
+    def test_reception_cannot_mutate_schedules(self):
+        self.client.force_login(self.reception)
+        payload = json.dumps({
+            'training_class_id': self.boxing.id,
+            'weekday': 'friday',
+            'start_time': '09:00:00',
+            'end_time': '10:00:00',
+        })
+        self.assertEqual(
+            self.client.post(
+                '/api/fitness/classes/schedules',
+                data=payload,
+                content_type='application/json',
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.put(
+                f'/api/fitness/classes/schedules/{self.monday.id}',
+                data=payload,
+                content_type='application/json',
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.delete(f'/api/fitness/classes/schedules/{self.monday.id}').status_code,
+            403,
+        )
+        self.assertTrue(ClassSchedule.objects.filter(id=self.monday.id).exists())
+
+    def test_admin_can_create_update_and_deactivate_schedule(self):
+        self.client.force_login(self.admin)
+        created = self.client.post(
+            '/api/fitness/classes/schedules',
+            data=json.dumps({
+                'training_class_id': self.boxing.id,
+                'weekday': 'friday',
+                'start_time': '09:00:00',
+                'end_time': '10:00:00',
+                'location': 'Studio',
+                'capacity': 8,
+                'is_active': True,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(created.status_code, 200)
+        body = created.json()
+        self.assertEqual(body['weekday'], 'friday')
+        self.assertEqual(body['location'], 'Studio')
+        self.assertEqual(body['capacity'], 8)
+        self.assertIsNone(body['trainer_id'])
+        schedule_id = body['id']
+
+        updated = self.client.put(
+            f'/api/fitness/classes/schedules/{schedule_id}',
+            data=json.dumps({
+                'training_class_id': self.boxing.id,
+                'weekday': 'friday',
+                'start_time': '09:00:00',
+                'end_time': '10:00:00',
+                'trainer_id': self.trainer.id,
+                'location': 'Studio 2',
+                'capacity': 8,
+                'is_active': False,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertFalse(updated.json()['is_active'])
+        self.assertEqual(updated.json()['trainer_name'], 'Karim Coach')
+        self.assertNotIn('monthly_pay', updated.json())
+        self.assertEqual(
+            self._calendar(start='2026-09-04', end='2026-09-04').json()['items'],
+            [],
+        )
+        super_admin = User.objects.create_user(username='cal-super-write')
+        Group.objects.get_or_create(name='Super Admin')[0].user_set.add(super_admin)
+        self.client.force_login(super_admin)
+        deleted = self.client.delete(f'/api/fitness/classes/schedules/{schedule_id}')
+        self.assertEqual(deleted.status_code, 200)
+        self.assertFalse(ClassSchedule.objects.filter(id=schedule_id).exists())
+
+    def test_weekly_occurrences_are_generated_inside_the_requested_range(self):
+        self.client.force_login(self.admin)
+        body = self._calendar().json()
+        self.assertEqual(body['start_date'], '2026-09-01')
+        self.assertEqual(body['end_date'], '2026-09-30')
+        self.assertEqual(body['timezone'], 'Africa/Casablanca')
+        dates = [item['date'] for item in body['items']]
+        self.assertEqual(
+            dates,
+            [
+                '2026-09-02', '2026-09-07', '2026-09-09', '2026-09-14',
+                '2026-09-16', '2026-09-21', '2026-09-23', '2026-09-28',
+                '2026-09-30',
+            ],
+        )
+        monday = next(item for item in body['items'] if item['date'] == '2026-09-07')
+        self.assertEqual(monday['schedule_id'], self.monday.id)
+        self.assertEqual(monday['training_class_id'], self.boxing.id)
+        self.assertEqual(monday['class_name'], 'Morning Boxing')
+        self.assertEqual(monday['class_type'], 'boxing')
+        self.assertEqual(monday['weekday'], 'monday')
+        self.assertTrue(monday['start_time'].startswith('18:00'))
+        self.assertTrue(monday['end_time'].startswith('19:00'))
+        self.assertTrue(monday['starts_at'].startswith('2026-09-07T18:00:00'))
+        self.assertIn('+01:00', monday['starts_at'])
+        self.assertEqual(monday['trainer_id'], self.trainer.id)
+        self.assertEqual(monday['trainer_name'], 'Karim Coach')
+        self.assertEqual(monday['location'], 'Ring 1')
+        self.assertEqual(monday['capacity'], 12)
+        self.assertEqual(monday['member_count'], 1)
+        self.assertNotIn('available_spaces', monday)
+        encoded = json.dumps(body)
+        self.assertNotIn('monthly_pay', encoded)
+        self.assertNotIn('7777', encoded)
+        self.assertNotIn('pay_amount', encoded)
+
+    def test_schedule_outside_range_is_excluded(self):
+        self.client.force_login(self.admin)
+        body = self._calendar(start='2026-09-07', end='2026-09-07').json()
+        self.assertEqual([item['date'] for item in body['items']], ['2026-09-07'])
+        self.assertEqual(body['items'][0]['class_name'], 'Morning Boxing')
+        self.assertEqual(len(body['items']), 1)
+
+    def test_inactive_schedule_and_inactive_class_produce_no_occurrences(self):
+        self.client.force_login(self.admin)
+        self.monday.is_active = False
+        self.monday.save(update_fields=['is_active', 'updated_at'])
+        self.wednesday.training_class.is_active = False
+        self.wednesday.training_class.save(update_fields=['is_active', 'updated_at'])
+        body = self._calendar().json()
+        self.assertEqual(body['items'], [])
+        self.assertTrue(ClassSchedule.objects.filter(id=self.monday.id).exists())
+
+    def test_invalid_time_and_date_ranges_are_rejected(self):
+        self.client.force_login(self.admin)
+        invalid_time = self.client.post(
+            '/api/fitness/classes/schedules',
+            data=json.dumps({
+                'training_class_id': self.boxing.id,
+                'weekday': 'monday',
+                'start_time': '19:00:00',
+                'end_time': '18:00:00',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(invalid_time.status_code, 400)
+        self.assertEqual(self.client.get('/api/fitness/classes/calendar').status_code, 400)
+        self.assertEqual(self._calendar(start='2026-09-30', end='2026-09-01').status_code, 400)
+        self.assertEqual(self._calendar(start='not-a-date', end='2026-09-01').status_code, 400)
+        self.assertEqual(self._calendar(start='2026-01-01', end='2026-03-31').status_code, 400)
+        self.assertEqual(
+            self.client.post(
+                '/api/fitness/classes/schedules',
+                data=json.dumps({
+                    'training_class_id': self.boxing.id,
+                    'weekday': 'funday',
+                    'start_time': '18:00:00',
+                    'end_time': '19:00:00',
+                }),
+                content_type='application/json',
+            ).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.client.post(
+                '/api/fitness/classes/schedules',
+                data=json.dumps({
+                    'training_class_id': 999999,
+                    'weekday': 'monday',
+                    'start_time': '18:00:00',
+                    'end_time': '19:00:00',
+                }),
+                content_type='application/json',
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.post(
+                '/api/fitness/classes/schedules',
+                data=json.dumps({
+                    'training_class_id': self.boxing.id,
+                    'weekday': 'monday',
+                    'start_time': '18:00:00',
+                    'end_time': '19:00:00',
+                    'trainer_id': 999999,
+                }),
+                content_type='application/json',
+            ).status_code,
+            404,
+        )
+
+    def test_existing_class_list_is_unchanged(self):
+        self.client.force_login(self.admin)
+        listed = self.client.get('/api/fitness/classes')
+        self.assertEqual(listed.status_code, 200)
+        row = listed.json()[0]
+        self.assertEqual(
+            set(row),
+            {'id', 'name', 'class_type', 'price_per_member', 'member_count', 'team_total', 'is_active'},
+        )
+        self.assertNotIn('weekday', row)
+        self.assertNotIn('start_time', row)
+
+    def test_anonymous_schedule_endpoints_get_401(self):
+        payload = json.dumps({
+            'training_class_id': self.boxing.id,
+            'weekday': 'monday',
+            'start_time': '18:00:00',
+            'end_time': '19:00:00',
+        })
+        self.assertEqual(self.client.get('/api/fitness/classes/schedules').status_code, 401)
+        self.assertEqual(self.client.get(f'/api/fitness/classes/schedules/{self.monday.id}').status_code, 401)
+        self.assertEqual(
+            self.client.post(
+                '/api/fitness/classes/schedules',
+                data=payload,
+                content_type='application/json',
+            ).status_code,
+            401,
+        )
+
+    def test_reception_can_read_schedule_but_ids_cannot_bypass_writes(self):
+        self.client.force_login(self.reception)
+        detail = self.client.get(f'/api/fitness/classes/schedules/{self.monday.id}')
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()['id'], self.monday.id)
+        self.assertNotIn('monthly_pay', detail.json())
+        self.assertEqual(self.client.get('/api/fitness/classes/schedules/999999').status_code, 404)
+        self.assertEqual(
+            self.client.put(
+                f'/api/fitness/classes/schedules/{self.monday.id}',
+                data=json.dumps({
+                    'training_class_id': self.boxing.id,
+                    'weekday': 'sunday',
+                    'start_time': '08:00:00',
+                    'end_time': '09:00:00',
+                    'is_active': False,
+                }),
+                content_type='application/json',
+            ).status_code,
+            403,
+        )
+        self.monday.refresh_from_db()
+        self.assertEqual(self.monday.weekday, 0)
+        self.assertTrue(self.monday.is_active)
+
+    def test_calendar_payload_excludes_admin_financial_data(self):
+        self.client.force_login(self.admin)
+        body = self._calendar().json()
+        encoded = json.dumps(body)
+        forbidden = (
+            'monthly_pay', 'pay_amount', 'is_paid', 'remaining_balance', 'total_paid',
+            'price_per_member', 'team_total', 'expense', 'notification', 'receipt',
+        )
+        for key in forbidden:
+            self.assertNotIn(key, encoded)
+        item = next(row for row in body['items'] if row['schedule_id'] == self.monday.id)
+        self.assertEqual(
+            set(item),
+            {
+                'schedule_id', 'training_class_id', 'class_name', 'class_type', 'date',
+                'weekday', 'start_time', 'end_time', 'starts_at', 'ends_at',
+                'trainer_id', 'trainer_name', 'location', 'capacity', 'member_count',
+                'is_active',
+            },
+        )
+        self.assertEqual(item['capacity'], 12)
+        self.assertEqual(item['member_count'], 1)
+        self.assertNotIn('available_spaces', item)
+
+    def test_calendar_range_is_capped_at_62_days(self):
+        self.client.force_login(self.admin)
+        allowed = self._calendar(start='2026-01-01', end='2026-03-03')
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(allowed.json()['start_date'], '2026-01-01')
+        self.assertEqual(allowed.json()['end_date'], '2026-03-03')
+        self.assertTrue(all('2026-01-01' <= item['date'] <= '2026-03-03' for item in allowed.json()['items']))
+        self.assertEqual(self._calendar(start='2026-01-01', end='2026-03-04').status_code, 400)
+        self.assertEqual(self._calendar(start='', end='2026-09-01').status_code, 400)
+
+    def test_year_boundary_week_stays_inside_requested_range(self):
+        self.client.force_login(self.admin)
+        body = self._calendar(start='2026-12-28', end='2027-01-03').json()
+        dates = [item['date'] for item in body['items']]
+        self.assertEqual(dates, ['2026-12-28', '2026-12-30'])
+        self.assertTrue(all('2026-12-28' <= item['date'] <= '2027-01-03' for item in body['items']))
+        self.assertNotIn('2027-01-04', dates)
+
+    def test_leap_year_february_does_not_leak_into_march(self):
+        self.client.force_login(self.admin)
+        body = self._calendar(start='2024-02-01', end='2024-02-29').json()
+        dates = [item['date'] for item in body['items']]
+        self.assertEqual(
+            dates,
+            [
+                '2024-02-05', '2024-02-07', '2024-02-12', '2024-02-14',
+                '2024-02-19', '2024-02-21', '2024-02-26', '2024-02-28',
+            ],
+        )
+        self.assertTrue(all(item['date'].startswith('2024-02-') for item in body['items']))
+
+    def test_monday_to_sunday_week_includes_only_that_week(self):
+        self.client.force_login(self.admin)
+        body = self._calendar(start='2026-09-07', end='2026-09-13').json()
+        dates = [item['date'] for item in body['items']]
+        self.assertEqual(dates, ['2026-09-07', '2026-09-09'])
+        self.assertEqual(body['items'][0]['weekday'], 'monday')
+        self.assertEqual(body['items'][1]['weekday'], 'wednesday')
+        self.assertTrue(body['items'][0]['starts_at'].endswith('+01:00'))
+        self.assertTrue(body['items'][0]['ends_at'].endswith('+01:00'))
+
+    def test_deleting_class_cascades_schedules_and_keeps_member_profiles(self):
+        self.client.force_login(self.admin)
+        member = ClientProfile.objects.get(id_number='CAL-001')
+        schedule_id = self.monday.id
+        deleted = self.client.delete(f'/api/fitness/classes/{self.boxing.id}')
+        self.assertEqual(deleted.status_code, 200)
+        self.assertFalse(TrainingClass.objects.filter(id=self.boxing.id).exists())
+        self.assertFalse(ClassSchedule.objects.filter(id=schedule_id).exists())
+        self.assertTrue(ClientProfile.objects.filter(id=member.id).exists())
+        self.assertFalse(ClassMember.objects.filter(client=member, training_class_id=self.boxing.id).exists())
 
 
 
