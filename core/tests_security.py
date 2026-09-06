@@ -492,7 +492,7 @@ class CrashAndInjectionTests(TestCase):
             data=json.dumps({'amount': '-10.00', 'received_by': 'desk', 'notes': ''}),
             content_type='application/json',
         )
-        self.assertIn(response.status_code, (404, 422))
+        self.assertIn(response.status_code, (400, 404, 422))
         self.assertNotIn(b'Traceback', response.content)
 
     def test_wrong_content_type_does_not_crash(self):

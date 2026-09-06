@@ -322,7 +322,8 @@ class MembershipCrudApiTest(TestCase):
             content_type='application/json',
         )
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()['detail'], 'Payment exceeds remaining balance')
+        self.assertIn('Payment exceeds remaining balance', response.json()['detail'])
+        self.assertIn('300.00 MAD', response.json()['detail'])
 
     def test_record_payment_endpoint(self):
         list_response = self.client.get(f'/api/fitness/memberships/{self.membership.id}/payments')
@@ -336,7 +337,8 @@ class MembershipCrudApiTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(Decimal(str(response.json()['amount'])), Decimal('50.00'))
 
-    def test_record_payment_can_set_remaining_balance(self):
+    def test_record_payment_ignores_client_remaining_and_keeps_price(self):
+        original_price = self.membership.price
         response = self.client.post(
             f'/api/fitness/memberships/{self.membership.id}/payments',
             data=json.dumps({'amount': '100.00', 'received_by': 'Admin', 'notes': 'Cash', 'remaining': '20.00'}),
@@ -344,9 +346,9 @@ class MembershipCrudApiTest(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.membership.refresh_from_db()
-        self.assertEqual(self.membership.price, Decimal('120.00'))
+        self.assertEqual(self.membership.price, original_price)
         self.assertEqual(self.membership.total_paid, Decimal('100.00'))
-        self.assertEqual(self.membership.remaining_balance, Decimal('20.00'))
+        self.assertEqual(self.membership.remaining_balance, Decimal('200.00'))
 
     def test_membership_remaining_can_be_patched(self):
         GymPayment.objects.create(membership=self.membership, amount=Decimal('80.00'), received_by='Admin')
@@ -2219,6 +2221,174 @@ class DashboardSummaryApiTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('whatsapp_due', response.json())
         self.assertNotIn('attention', response.json())
+
+
+class PaymentIntegrityApiTest(TestCase):
+    def setUp(self):
+        self.staff = User.objects.create_user(username='pay-int-staff', is_staff=True)
+        self.client.force_login(self.staff)
+        user = User.objects.create_user(username='pay-int-member', first_name='Sara', last_name='Benali')
+        self.member = ClientProfile.objects.create(user=user, id_number='PAY-INT-1')
+        other_user = User.objects.create_user(username='pay-int-other', first_name='Omar')
+        self.other = ClientProfile.objects.create(user=other_user, id_number='PAY-INT-2')
+        self.plan = MembershipPlan.objects.create(name='Monthly', duration_months=1, price=Decimal('130.00'))
+        self.membership = Membership.objects.create(
+            member=self.member,
+            plan=self.plan,
+            start_date='2026-09-04',
+            end_date='2026-10-04',
+            price=Decimal('130.00'),
+        )
+        self.other_membership = Membership.objects.create(
+            member=self.other,
+            plan=self.plan,
+            start_date='2026-09-04',
+            end_date='2026-10-04',
+            price=Decimal('130.00'),
+        )
+
+    def _pay(self, membership_id, amount, remaining=None):
+        payload = {'amount': str(amount), 'received_by': 'Desk', 'notes': 'Cash'}
+        if remaining is not None:
+            payload['remaining'] = str(remaining)
+        return self.client.post(
+            f'/api/fitness/memberships/{membership_id}/payments',
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+
+    def test_partial_and_exact_payments_succeed(self):
+        first = self._pay(self.membership.id, '50.00')
+        self.assertEqual(first.status_code, 200)
+        self.membership.refresh_from_db()
+        self.assertEqual(self.membership.total_paid, Decimal('50.00'))
+        self.assertEqual(self.membership.remaining_balance, Decimal('80.00'))
+        exact = self._pay(self.membership.id, '80.00')
+        self.assertEqual(exact.status_code, 200)
+        self.membership.refresh_from_db()
+        self.assertEqual(self.membership.price, Decimal('130.00'))
+        self.assertEqual(self.membership.total_paid, Decimal('130.00'))
+        self.assertEqual(self.membership.remaining_balance, Decimal('0.00'))
+        self.assertEqual(exact.json()['membership_id'], self.membership.id)
+        self.assertEqual(exact.json()['member_id'], self.member.id)
+
+    def test_overpayment_and_non_positive_amounts_fail_without_creating_rows(self):
+        blocked = self._pay(self.membership.id, '200.00')
+        self.assertEqual(blocked.status_code, 400)
+        self.assertEqual(
+            blocked.json()['detail'],
+            'Payment exceeds remaining balance. Remaining balance: 130.00 MAD.',
+        )
+        self.assertEqual(self._pay(self.membership.id, '0').status_code, 400)
+        self.assertEqual(self._pay(self.membership.id, '-10').status_code, 400)
+        self.assertEqual(GymPayment.objects.filter(membership=self.membership).count(), 0)
+        missing = self._pay(999999, '10.00')
+        self.assertEqual(missing.status_code, 404)
+
+    def test_remaining_zero_cannot_overpay_or_rewrite_price(self):
+        original_price = self.membership.price
+        overpay = self._pay(self.membership.id, '1200.00', remaining='0')
+        self.assertEqual(overpay.status_code, 400)
+        self.membership.refresh_from_db()
+        self.assertEqual(self.membership.price, original_price)
+        self.assertEqual(self.membership.total_paid, Decimal('0.00'))
+        self.assertFalse(GymPayment.objects.filter(membership=self.membership).exists())
+        ok = self._pay(self.membership.id, '30.00', remaining='0')
+        self.assertEqual(ok.status_code, 200)
+        self.membership.refresh_from_db()
+        self.assertEqual(self.membership.price, original_price)
+        self.assertEqual(self.membership.total_paid, Decimal('30.00'))
+        self.assertEqual(self.membership.remaining_balance, Decimal('100.00'))
+
+    def test_second_payment_cannot_spend_the_same_remaining(self):
+        self.assertEqual(self._pay(self.membership.id, '100.00').status_code, 200)
+        second = self._pay(self.membership.id, '50.00')
+        self.assertEqual(second.status_code, 400)
+        self.assertIn('30.00 MAD', second.json()['detail'])
+        self.assertEqual(GymPayment.objects.filter(membership=self.membership).count(), 1)
+
+    def test_payment_stays_on_the_requested_membership(self):
+        created = self._pay(self.membership.id, '40.00')
+        self.assertEqual(created.status_code, 200)
+        payment = GymPayment.objects.get(id=created.json()['id'])
+        self.assertEqual(payment.membership_id, self.membership.id)
+        self.assertEqual(payment.membership.member_id, self.member.id)
+        self.assertNotEqual(payment.membership_id, self.other_membership.id)
+        self.assertEqual(self.other_membership.total_paid, Decimal('0.00'))
+
+    def test_price_cannot_go_below_total_paid(self):
+        self._pay(self.membership.id, '120.00')
+        payment_amount = GymPayment.objects.get(membership=self.membership).amount
+        raised = self.client.patch(
+            f'/api/fitness/memberships/{self.membership.id}/price',
+            data=json.dumps({'price': '200.00'}),
+            content_type='application/json',
+        )
+        self.assertEqual(raised.status_code, 200)
+        self.membership.refresh_from_db()
+        self.assertEqual(self.membership.price, Decimal('200.00'))
+        equal = self.client.patch(
+            f'/api/fitness/memberships/{self.membership.id}/price',
+            data=json.dumps({'price': '120.00'}),
+            content_type='application/json',
+        )
+        self.assertEqual(equal.status_code, 200)
+        too_low = self.client.patch(
+            f'/api/fitness/memberships/{self.membership.id}/price',
+            data=json.dumps({'price': '100.00'}),
+            content_type='application/json',
+        )
+        self.assertEqual(too_low.status_code, 400)
+        self.assertEqual(
+            too_low.json()['detail'],
+            'Membership price cannot be lower than the amount already paid.',
+        )
+        put_low = self.client.put(
+            f'/api/fitness/memberships/{self.membership.id}',
+            data=json.dumps({
+                'member_id': self.member.id,
+                'plan_id': self.plan.id,
+                'start_date': '2026-09-04',
+                'price': '50.00',
+                'notes': '',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(put_low.status_code, 400)
+        self.membership.refresh_from_db()
+        self.assertEqual(self.membership.price, Decimal('120.00'))
+        self.assertEqual(GymPayment.objects.get(membership=self.membership).amount, payment_amount)
+
+    def test_member_360_uses_corrected_membership_values(self):
+        self._pay(self.membership.id, '50.00')
+        body = self.client.get(f'/api/fitness/members/{self.member.id}/360').json()
+        membership = body['memberships'][0]
+        self.assertEqual(Decimal(str(membership['price'])), Decimal('130.00'))
+        self.assertEqual(Decimal(str(membership['total_paid'])), Decimal('50.00'))
+        self.assertEqual(Decimal(str(membership['remaining_balance'])), Decimal('80.00'))
+        self.assertEqual(membership['payment_status'], 'partial')
+        self.assertEqual({item['member_id'] for item in body['payments']}, {self.member.id})
+        self.assertEqual(body['payments'][0]['membership_id'], self.membership.id)
+
+    def test_historical_overpaid_membership_is_not_rewritten(self):
+        GymPayment.objects.create(
+            membership=self.membership,
+            amount=Decimal('1320.00'),
+            received_by='Desk',
+            notes='Historical overpayment',
+        )
+        blocked = self._pay(self.membership.id, '10.00')
+        self.assertEqual(blocked.status_code, 400)
+        self.assertIn('Remaining balance: 0.00 MAD', blocked.json()['detail'])
+        self.membership.refresh_from_db()
+        self.assertEqual(self.membership.price, Decimal('130.00'))
+        self.assertEqual(self.membership.total_paid, Decimal('1320.00'))
+        self.assertEqual(self.membership.remaining_balance, Decimal('0.00'))
+        self.assertEqual(GymPayment.objects.filter(membership=self.membership).count(), 1)
+        self.assertEqual(
+            GymPayment.objects.get(membership=self.membership).amount,
+            Decimal('1320.00'),
+        )
 
 
 

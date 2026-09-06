@@ -296,6 +296,14 @@ curl http://127.0.0.1:8000/api/fitness/members/qr/OPAQUE_TOKEN
 # schedules that fall on that weekday, not from class definitions. Reception may
 # see payment totals (same as GET /payments); P&L and payroll are not included.
 curl "http://127.0.0.1:8000/api/fitness/dashboard/summary?date=2026-09-07"
+
+# Record a membership payment (gym staff). Amount cannot exceed server remaining
+# balance: max(price - paid payments, 0). Optional `remaining` is ignored for
+# price changes; membership.price stays authoritative. Overpay → 400.
+# PATCH /api/fitness/memberships/{id}/price cannot set price below total paid.
+curl -X POST http://127.0.0.1:8000/api/fitness/memberships/1/payments \
+   -H "Content-Type: application/json" \
+   -d '{"amount":"50.00","received_by":"Desk","notes":"Cash"}'
 ```
 
 The Django admin also shows each class's member count and automatic team total in MAD.

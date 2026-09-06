@@ -1261,26 +1261,52 @@ def create_membership(request, payload: MembershipIn):
     return membership_data(item)
 
 
+def _paid_payments_total(membership):
+    return membership.payments.filter(status='paid').aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+
+
+def _remaining_balance_from(price, paid):
+    return max(price - paid, Decimal('0.00'))
+
+
+def _ensure_price_not_below_paid(new_price, paid):
+    if new_price < paid:
+        raise HttpError(400, 'Membership price cannot be lower than the amount already paid.')
+
+
+def _lock_membership(membership_id):
+    try:
+        return Membership.objects.select_related('member__user').select_for_update().get(id=membership_id)
+    except Membership.DoesNotExist:
+        raise HttpError(404, 'Membership not found')
+
+
 @router.put('/fitness/memberships/{membership_id}', response=MembershipOut)
 def update_membership(request, membership_id: int, payload: MembershipIn):
     try:
-        item = Membership.objects.get(id=membership_id)
         member = ClientProfile.objects.get(id=payload.member_id)
         plan = MembershipPlan.objects.get(id=payload.plan_id, is_active=True)
-    except (Membership.DoesNotExist, ClientProfile.DoesNotExist, MembershipPlan.DoesNotExist):
+    except (ClientProfile.DoesNotExist, MembershipPlan.DoesNotExist):
         raise HttpError(404, 'Membership, member, or plan not found')
-
-    previous_plan_id = item.plan_id
-    item.member = member
-    item.plan = plan
-    item.start_date = payload.start_date
-    item.end_date = payload.start_date + timedelta(days=30 * plan.duration_months)
-    if payload.price is not None:
-        item.price = payload.price
-    elif previous_plan_id != plan.id:
-        item.price = plan.price
-    item.notes = payload.notes
-    item.save()
+    with transaction.atomic():
+        try:
+            item = _lock_membership(membership_id)
+        except HttpError:
+            raise HttpError(404, 'Membership, member, or plan not found')
+        previous_plan_id = item.plan_id
+        paid = _paid_payments_total(item)
+        item.member = member
+        item.plan = plan
+        item.start_date = payload.start_date
+        item.end_date = payload.start_date + timedelta(days=30 * plan.duration_months)
+        if payload.price is not None:
+            _ensure_price_not_below_paid(payload.price, paid)
+            item.price = payload.price
+        elif previous_plan_id != plan.id:
+            _ensure_price_not_below_paid(plan.price, paid)
+            item.price = plan.price
+        item.notes = payload.notes
+        item.save()
     create_gym_notifications('important_system_alerts', 'memberships', 'Membership updated', f'{member.user.get_full_name()} membership was updated.', member.id, request.user)
     return membership_data(item)
 
@@ -1300,12 +1326,11 @@ def delete_membership(request, membership_id: int):
 
 @router.patch('/fitness/memberships/{membership_id}/price', response=MembershipOut)
 def update_membership_price(request, membership_id: int, payload: MembershipPriceIn):
-    try:
-        item = Membership.objects.select_related('member__user').get(id=membership_id)
-    except Membership.DoesNotExist:
-        raise HttpError(404, 'Membership not found')
-    item.price = payload.price
-    item.save(update_fields=['price', 'updated_at'])
+    with transaction.atomic():
+        item = _lock_membership(membership_id)
+        _ensure_price_not_below_paid(payload.price, _paid_payments_total(item))
+        item.price = payload.price
+        item.save(update_fields=['price', 'updated_at'])
     create_gym_notifications(
         'important_system_alerts',
         'memberships',
@@ -1319,13 +1344,14 @@ def update_membership_price(request, membership_id: int, payload: MembershipPric
 
 @router.patch('/fitness/memberships/{membership_id}/remaining', response=MembershipOut)
 def update_membership_remaining(request, membership_id: int, payload: MembershipRemainingIn):
-    try:
-        item = Membership.objects.select_related('member__user').prefetch_related('payments').get(id=membership_id)
-    except Membership.DoesNotExist:
-        raise HttpError(404, 'Membership not found')
-    item.price = item.total_paid + payload.remaining
-    item.payment_status_override = ''
-    item.save(update_fields=['price', 'payment_status_override', 'updated_at'])
+    with transaction.atomic():
+        item = _lock_membership(membership_id)
+        paid = _paid_payments_total(item)
+        new_price = paid + payload.remaining
+        _ensure_price_not_below_paid(new_price, paid)
+        item.price = new_price
+        item.payment_status_override = ''
+        item.save(update_fields=['price', 'payment_status_override', 'updated_at'])
     create_gym_notifications(
         'outstanding_payment' if payload.remaining > 0 else 'payment_received',
         'payments',
@@ -1375,28 +1401,29 @@ def membership_payments(request, membership_id: int):
 
 @router.post('/fitness/memberships/{membership_id}/payments', response=GymPaymentOut)
 def record_gym_payment(request, membership_id: int, payload: GymPaymentIn):
-    try:
-        membership = Membership.objects.select_related('member__user').get(id=membership_id)
-    except Membership.DoesNotExist:
-        raise HttpError(404, 'Membership not found')
-    if payload.remaining is not None:
-        membership.price = membership.total_paid + payload.amount + payload.remaining
-        membership.payment_status_override = ''
-        membership.save(update_fields=['price', 'payment_status_override', 'updated_at'])
-    elif payload.amount > membership.remaining_balance:
-        raise HttpError(400, 'Payment exceeds remaining balance')
-    payment = GymPayment.objects.create(
-        membership=membership,
-        amount=payload.amount,
-        received_by=_received_by_for_payment(request, payload.received_by),
-        notes=payload.notes,
-    )
+    if payload.amount is None or payload.amount <= 0:
+        raise HttpError(400, 'Payment amount must be greater than 0.')
+    with transaction.atomic():
+        membership = _lock_membership(membership_id)
+        paid = _paid_payments_total(membership)
+        remaining = _remaining_balance_from(membership.price, paid)
+        if payload.amount > remaining:
+            raise HttpError(
+                400,
+                f'Payment exceeds remaining balance. Remaining balance: {remaining:.2f} MAD.',
+            )
+        payment = GymPayment.objects.create(
+            membership=membership,
+            amount=payload.amount,
+            received_by=_received_by_for_payment(request, payload.received_by),
+            notes=payload.notes,
+        )
     member_name = membership.member.user.get_full_name()
     create_gym_notifications('payment_received', 'payments', 'Payment received', f'{member_name} paid {payment.amount} MAD.', membership.member_id, request.user)
-    remaining = membership.price - membership.total_paid
-    if remaining > 0:
-        create_gym_notifications('partial_payment', 'payments', 'Partial payment', f'{member_name} paid {payment.amount} MAD and still has {remaining} MAD remaining.', membership.member_id, request.user)
-        create_gym_notifications('outstanding_payment', 'payments', 'Outstanding payment', f'{member_name} has {remaining} MAD remaining.', membership.member_id, request.user)
+    remaining_after = membership.price - _paid_payments_total(membership)
+    if remaining_after > 0:
+        create_gym_notifications('partial_payment', 'payments', 'Partial payment', f'{member_name} paid {payment.amount} MAD and still has {remaining_after} MAD remaining.', membership.member_id, request.user)
+        create_gym_notifications('outstanding_payment', 'payments', 'Outstanding payment', f'{member_name} has {remaining_after} MAD remaining.', membership.member_id, request.user)
     payment = _payment_queryset().get(id=payment.id)
     return payment_data(payment)
 

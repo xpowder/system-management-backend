@@ -397,7 +397,7 @@ class MembershipPriceIn(BaseModel):
 
 
 class GymPaymentIn(BaseModel):
-    amount: Decimal = Field(gt=0)
+    amount: Decimal
     received_by: str
     notes: str = ''
     remaining: Optional[Decimal] = Field(default=None, ge=0)
