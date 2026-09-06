@@ -285,6 +285,17 @@ curl http://127.0.0.1:8000/api/fitness/members/1/360
 # phone, member id, or payment data. Possession of the token is not login.
 # Inactive members still resolve with is_active=false; check-in is not performed.
 curl http://127.0.0.1:8000/api/fitness/members/qr/OPAQUE_TOKEN
+
+# Daily gym summary (gym staff session). Reception, Admin, Super Admin, or is_staff.
+# Anonymous 401. Gym member / Trainer / provider 403. Missing or invalid date 400.
+# `date` is required YYYY-MM-DD in Africa/Casablanca. Counts only — no member lists,
+# CIN, payroll, expenses, or payment rows. `checked_in` is visits that started that
+# local day (same idea as the attendance desk). `inside` is still-open visits.
+# Memberships: unique active members covering that date; expired members have a
+# lapsed membership and no covering one. Classes/trainers come from active weekly
+# schedules that fall on that weekday, not from class definitions. Reception may
+# see payment totals (same as GET /payments); P&L and payroll are not included.
+curl "http://127.0.0.1:8000/api/fitness/dashboard/summary?date=2026-09-07"
 ```
 
 The Django admin also shows each class's member count and automatic team total in MAD.

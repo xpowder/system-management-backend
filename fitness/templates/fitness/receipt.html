@@ -2,40 +2,181 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>{{ company }} cash receipt</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ company }} cash receipt {{ receipt_number }}</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 32px; color: #172126; }
-    h1 { margin: 0 0 4px; letter-spacing: 1px; }
-    .muted { color: #4A6057; margin: 0 0 24px; }
-    table { border-collapse: collapse; width: 100%; max-width: 640px; }
-    th, td { text-align: left; padding: 8px 4px; border-bottom: 1px solid #D6DDD8; }
-    th { width: 180px; color: #4A6057; font-weight: 600; }
-    .actions { margin-bottom: 20px; }
+    :root {
+      --ink: #172126;
+      --muted: #4A6057;
+      --line: #D6DDD8;
+      --paper: #F3F5F1;
+      --white: #FFFFFF;
+      --coral: #EF735C;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 28px 20px 40px;
+      background: var(--paper);
+      color: var(--ink);
+      font: 14px/1.45 Arial, Helvetica, sans-serif;
+    }
+    .actions { max-width: 640px; margin: 0 auto 16px; }
     button {
-      font: 14px Arial, sans-serif;
-      padding: 8px 14px;
-      background: #ef735c;
-      color: white;
+      min-height: 40px;
+      padding: 0 16px;
       border: 0;
+      background: var(--coral);
+      color: var(--white);
+      font: 700 13px Arial, Helvetica, sans-serif;
       cursor: pointer;
     }
-    @media print { .actions { display: none; } }
+    .sheet {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 28px 28px 24px;
+      background: var(--white);
+      border: 1px solid var(--line);
+    }
+    .brand {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      padding-bottom: 20px;
+      border-bottom: 2px solid var(--ink);
+    }
+    .mark {
+      display: inline-grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      margin-bottom: 10px;
+      background: var(--coral);
+      color: var(--white);
+      font: 800 18px Arial, Helvetica, sans-serif;
+    }
+    .eyebrow {
+      margin: 0 0 4px;
+      color: var(--muted);
+      font: 10px/1.3 "DM Mono", Consolas, monospace;
+      letter-spacing: 1.4px;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: -.3px;
+    }
+    .qr { margin: 0; text-align: center; }
+    .qr img {
+      display: block;
+      width: 112px;
+      height: 112px;
+      padding: 6px;
+      background: var(--white);
+      border: 1px solid var(--line);
+    }
+    .qr figcaption {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: .4px;
+    }
+    .who { padding: 22px 0 8px; }
+    .who h2 {
+      margin: 4px 0 6px;
+      font-size: 26px;
+      letter-spacing: -.4px;
+      line-height: 1.15;
+    }
+    .who p { margin: 0; color: var(--muted); }
+    .total {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin: 16px 0 8px;
+      padding: 16px 18px;
+      background: var(--paper);
+      border-left: 4px solid var(--coral);
+    }
+    .total span { color: var(--muted); font-size: 12px; letter-spacing: .6px; text-transform: uppercase; }
+    .total strong { font-size: 28px; letter-spacing: -.5px; }
+    table {
+      width: 100%;
+      margin-top: 8px;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 11px 0;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      width: 38%;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    td { font-weight: 700; }
+    .foot {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      margin: 22px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .ref { font: 12px "DM Mono", Consolas, monospace; letter-spacing: .4px; }
+    @media print {
+      body { background: #fff; padding: 0; }
+      .actions { display: none; }
+      .sheet { border: 0; max-width: none; padding: 8mm; }
+    }
   </style>
 </head>
 <body>
   <div class="actions">
     <button type="button" onclick="window.print()">Print</button>
   </div>
-  <h1>{{ company }}</h1>
-  <p class="muted">Cash receipt</p>
-  <table>
-    <tr><th>First name</th><td>{{ first_name }}</td></tr>
-    <tr><th>Last name</th><td>{{ last_name }}</td></tr>
-    <tr><th>Class</th><td>{{ class_name }}</td></tr>
-    <tr><th>Date</th><td>{{ payment_date }}</td></tr>
-    <tr><th>Time</th><td>{{ payment_time }}</td></tr>
-    <tr><th>Amount paid</th><td>{{ amount_paid }} {{ currency }}</td></tr>
-    <tr><th>Received by</th><td>{{ received_by }}</td></tr>
-  </table>
+  <article class="sheet">
+    <header class="brand">
+      <div>
+        <span class="mark" aria-hidden="true">{{ company|make_list|first }}</span>
+        <p class="eyebrow">Cash receipt</p>
+        <h1>{{ company }}</h1>
+        <p class="ref">{{ receipt_number }}</p>
+      </div>
+      {% if qr_svg_b64 %}
+      <figure class="qr">
+        <img src="data:image/svg+xml;base64,{{ qr_svg_b64 }}" width="112" height="112" alt="Member QR">
+        <figcaption>Member QR</figcaption>
+      </figure>
+      {% endif %}
+    </header>
+    <section class="who">
+      <p class="eyebrow">Received from</p>
+      <h2>{{ first_name }} {{ last_name }}</h2>
+      <p>{{ class_name }}</p>
+    </section>
+    <div class="total">
+      <span>Amount paid</span>
+      <strong>{{ amount_text }}</strong>
+    </div>
+    <table>
+      <tr><th>First name</th><td>{{ first_name }}</td></tr>
+      <tr><th>Last name</th><td>{{ last_name }}</td></tr>
+      <tr><th>Class</th><td>{{ class_name }}</td></tr>
+      <tr><th>Date</th><td>{{ payment_date }}</td></tr>
+      <tr><th>Time</th><td>{{ payment_time }}</td></tr>
+      <tr><th>Received by</th><td>{{ received_by }}</td></tr>
+      <tr><th>Method</th><td>Cash</td></tr>
+    </table>
+    <footer class="foot">
+      <span>Thank you. Keep this receipt for your records.</span>
+      <span>Scan the Member QR at reception to check in.</span>
+    </footer>
+  </article>
 </body>
 </html>

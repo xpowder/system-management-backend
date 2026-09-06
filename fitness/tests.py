@@ -1,5 +1,5 @@
 import json
-from datetime import time, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from django.contrib.auth.models import Group, User
@@ -1084,6 +1084,10 @@ class AttendanceDeskApiTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('image/svg', response['Content-Type'])
         self.assertIn(b'<svg', response.content)
+        png = self.client.get(f'/api/fitness/members/{self.member.id}/qr.png')
+        self.assertEqual(png.status_code, 200)
+        self.assertEqual(png['Content-Type'], 'image/png')
+        self.assertTrue(png.content.startswith(b'\x89PNG'))
 
     def test_member_without_active_membership_cannot_check_in(self):
         other_user = User.objects.create_user(username='desk-guest', first_name='Guest')
@@ -1187,9 +1191,14 @@ class GymCashDeskApiTest(TestCase):
         self.assertContains(html, 'Boxing Team')
         self.assertContains(html, '150.00')
         self.assertContains(html, 'Admin')
+        self.assertContains(html, 'Member QR')
+        self.assertContains(html, 'data:image/svg+xml;base64,')
         self.assertNotContains(html, 'CIN-CASH')
         self.assertNotContains(html, '0612345678')
         self.assertNotContains(html, 'Still owes')
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.qr_token)
+        self.assertNotContains(html, self.member.qr_token)
         pdf = self.client.get(f'/api/fitness/payments/{self.payment.id}/receipt')
         self.assertEqual(pdf.status_code, 200)
         self.assertEqual(pdf['Content-Type'], 'application/pdf')
@@ -1982,6 +1991,234 @@ class MemberQrLookupApiTest(TestCase):
         image = self.client.get(f'/api/fitness/members/{self.member_a.id}/qr')
         self.assertEqual(image.status_code, 200)
         self.assertIn('image/svg', image['Content-Type'])
+
+
+class DashboardSummaryApiTest(TestCase):
+    DAY = date(2026, 9, 7)
+
+    def setUp(self):
+        from bookings.tests.helpers import make_provider
+
+        self.admin = User.objects.create_user(username='dash-admin', is_staff=True)
+        self.reception = User.objects.create_user(username='dash-reception')
+        Group.objects.get_or_create(name='Reception')[0].user_set.add(self.reception)
+        self.super_admin = User.objects.create_user(username='dash-super')
+        Group.objects.get_or_create(name='Super Admin')[0].user_set.add(self.super_admin)
+        self.provider = make_provider(username='dash-provider')
+        self.plan = MembershipPlan.objects.create(name='Dash Plan', duration_months=1, price=Decimal('400.00'))
+        self.tz = timezone.get_current_timezone()
+        self.day_start = timezone.make_aware(datetime.combine(self.DAY, time.min), self.tz)
+
+    def _member(self, suffix, first='Sara', last='Benali', active=True):
+        user = User.objects.create_user(username=f'dash-{suffix}', first_name=first, last_name=last)
+        return ClientProfile.objects.create(user=user, id_number=f'DASH-{suffix}', is_active=active)
+
+    def _membership(self, member, start, end, price='400.00', status_override=''):
+        return Membership.objects.create(
+            member=member,
+            plan=self.plan,
+            start_date=start,
+            end_date=end,
+            price=Decimal(price),
+            status_override=status_override,
+        )
+
+    def _set_received_at(self, payment, when):
+        GymPayment.objects.filter(id=payment.id).update(received_at=when)
+
+    def _set_checked_in(self, visit, when):
+        Attendance.objects.filter(id=visit.id).update(checked_in_at=when)
+
+    def _summary(self, day=None, client=None):
+        if day is None:
+            value = self.DAY.isoformat()
+        elif hasattr(day, 'isoformat'):
+            value = day.isoformat()
+        else:
+            value = str(day)
+        http = client or self.client
+        return http.get(f'/api/fitness/dashboard/summary?date={value}')
+
+    def test_anonymous_gets_401(self):
+        self.assertEqual(self._summary().status_code, 401)
+
+    def test_gym_member_trainer_and_provider_get_403(self):
+        member_login = User.objects.create_user(username='dash-self', password='password123')
+        ClientProfile.objects.create(user=member_login, id_number='DASH-SELF')
+        self.client.force_login(member_login)
+        self.assertEqual(self._summary().status_code, 403)
+        trainer = User.objects.create_user(username='dash-trainer-login', password='password123')
+        Group.objects.get_or_create(name='Trainer')[0].user_set.add(trainer)
+        self.client.force_login(trainer)
+        self.assertEqual(self._summary().status_code, 403)
+        self.client.force_login(self.provider.user)
+        self.assertEqual(self._summary().status_code, 403)
+
+    def test_reception_admin_and_super_admin_get_200(self):
+        for user in (self.reception, self.admin, self.super_admin):
+            self.client.force_login(user)
+            response = self._summary()
+            self.assertEqual(response.status_code, 200, user.username)
+            body = response.json()
+            self.assertEqual(body['date'], '2026-09-07')
+            self.assertEqual(body['timezone'], 'Africa/Casablanca')
+
+    def test_missing_and_invalid_dates_are_400(self):
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.get('/api/fitness/dashboard/summary').status_code, 400)
+        self.assertEqual(self._summary(day='not-a-date').status_code, 400)
+        self.assertEqual(self.client.get('/api/fitness/dashboard/summary?date=2026-13-01').status_code, 400)
+
+    def test_empty_gym_returns_zeros(self):
+        self.client.force_login(self.reception)
+        body = self._summary().json()
+        self.assertEqual(body['attendance'], {'checked_in': 0, 'inside': 0})
+        self.assertEqual(body['memberships'], {'active': 0, 'expired': 0, 'expiring_today': 0})
+        self.assertEqual(Decimal(str(body['payments']['today_total'])), Decimal('0.00'))
+        self.assertEqual(Decimal(str(body['payments']['outstanding_total'])), Decimal('0.00'))
+        self.assertEqual(body['classes']['today_count'], 0)
+        self.assertEqual(body['trainers']['today_count'], 0)
+        self.assertEqual(body['attention'], {'expiring_today': 0, 'expired': 0, 'members_with_balance': 0})
+
+    def test_membership_statuses_follow_existing_window_rules(self):
+        active = self._member('active')
+        expired = self._member('expired', first='Omar')
+        expiring = self._member('expiring', first='Nadia')
+        renewed = self._member('renewed', first='Karim')
+        upcoming = self._member('upcoming', first='Lina')
+        cancelled = self._member('cancelled', first='Youssef')
+        archived = self._member('archived', first='Hiba', active=False)
+        self._membership(active, date(2026, 9, 1), date(2026, 9, 30))
+        self._membership(expired, date(2026, 8, 1), date(2026, 9, 1))
+        self._membership(expiring, date(2026, 8, 8), self.DAY)
+        self._membership(renewed, date(2026, 7, 1), date(2026, 8, 31))
+        self._membership(renewed, date(2026, 9, 1), date(2026, 9, 30))
+        self._membership(upcoming, date(2026, 9, 20), date(2026, 10, 20))
+        self._membership(cancelled, date(2026, 9, 1), date(2026, 9, 30), status_override='cancelled')
+        self._membership(archived, date(2026, 9, 1), date(2026, 9, 30))
+        self.client.force_login(self.admin)
+        body = self._summary().json()
+        self.assertEqual(body['memberships']['active'], 3)
+        self.assertEqual(body['memberships']['expiring_today'], 1)
+        self.assertEqual(body['memberships']['expired'], 1)
+        self.assertEqual(body['attention']['expiring_today'], 1)
+        self.assertEqual(body['attention']['expired'], 1)
+
+    def test_payments_are_scoped_to_casablanca_day_and_remaining_balance(self):
+        member = self._member('pay')
+        membership = self._membership(member, date(2026, 9, 1), date(2026, 9, 30), price='400.00')
+        today_pay = GymPayment.objects.create(membership=membership, amount=Decimal('100.00'), received_by='Desk')
+        yesterday_pay = GymPayment.objects.create(membership=membership, amount=Decimal('50.00'), received_by='Desk')
+        tomorrow_pay = GymPayment.objects.create(membership=membership, amount=Decimal('25.00'), received_by='Desk')
+        self._set_received_at(today_pay, self.day_start)
+        self._set_received_at(yesterday_pay, self.day_start - timedelta(minutes=1))
+        self._set_received_at(tomorrow_pay, self.day_start + timedelta(days=1))
+        other = self._member('pay-b', first='Omar')
+        other_membership = self._membership(other, date(2026, 8, 1), date(2026, 8, 31), price='200.00')
+        self.client.force_login(self.reception)
+        body = self._summary().json()
+        self.assertEqual(Decimal(str(body['payments']['today_total'])), Decimal('100.00'))
+        self.assertEqual(Decimal(str(body['payments']['outstanding_total'])), Decimal('425.00'))
+        self.assertEqual(body['attention']['members_with_balance'], 2)
+        self.assertIsNotNone(body['payments']['today_total'])
+
+    def test_attendance_counts_only_the_requested_local_date(self):
+        member = self._member('visit')
+        today_visit = Attendance.objects.create(member=member)
+        yesterday_visit = Attendance.objects.create(member=member)
+        open_visit = Attendance.objects.create(member=member)
+        self._set_checked_in(today_visit, self.day_start + timedelta(hours=9))
+        Attendance.objects.filter(id=today_visit.id).update(checked_out_at=self.day_start + timedelta(hours=10))
+        self._set_checked_in(yesterday_visit, self.day_start - timedelta(hours=1))
+        self._set_checked_in(open_visit, self.day_start + timedelta(hours=18))
+        self.client.force_login(self.admin)
+        body = self._summary().json()
+        self.assertEqual(body['attendance']['checked_in'], 2)
+        self.assertEqual(body['attendance']['inside'], 1)
+
+    def test_classes_and_trainers_use_active_schedules_for_that_weekday(self):
+        boxing = TrainingClass.objects.create(name='Morning Boxing', class_type=FitnessClassType.BOXING)
+        aerobic = TrainingClass.objects.create(name='Aerobic', class_type=FitnessClassType.AEROBIC)
+        inactive_class = TrainingClass.objects.create(
+            name='Kick',
+            class_type=FitnessClassType.KICK_BOXING,
+            is_active=False,
+        )
+        trainer = Trainer.objects.create(first_name='Karim', last_name='Coach', monthly_pay=Decimal('9999.00'))
+        ClassSchedule.objects.create(
+            training_class=boxing,
+            weekday=0,
+            start_time=time(18, 0),
+            end_time=time(19, 0),
+            trainer=trainer,
+        )
+        ClassSchedule.objects.create(
+            training_class=boxing,
+            weekday=0,
+            start_time=time(10, 0),
+            end_time=time(11, 0),
+            is_active=False,
+        )
+        ClassSchedule.objects.create(
+            training_class=aerobic,
+            weekday=2,
+            start_time=time(10, 0),
+            end_time=time(11, 0),
+            trainer=trainer,
+        )
+        ClassSchedule.objects.create(
+            training_class=inactive_class,
+            weekday=0,
+            start_time=time(12, 0),
+            end_time=time(13, 0),
+            trainer=trainer,
+        )
+        self.client.force_login(self.admin)
+        body = self._summary().json()
+        self.assertEqual(body['classes']['today_count'], 1)
+        self.assertEqual(body['trainers']['today_count'], 1)
+        encoded = json.dumps(body)
+        self.assertNotIn('9999', encoded)
+        self.assertNotIn('monthly_pay', encoded)
+        self.assertNotIn('expenses', encoded)
+        self.assertNotIn('id_number', encoded)
+        self.assertNotIn('phone', encoded)
+        self.assertEqual(set(body), {
+            'date', 'timezone', 'attendance', 'memberships', 'payments',
+            'classes', 'trainers', 'attention',
+        })
+        self.client.force_login(self.reception)
+        reception = self._summary().json()
+        self.assertIn('today_total', reception['payments'])
+        self.assertNotIn('monthly_pay', json.dumps(reception))
+
+    def test_summary_uses_a_small_fixed_query_count(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        member = self._member('scale')
+        membership = self._membership(member, date(2026, 9, 1), date(2026, 9, 30))
+        GymPayment.objects.create(membership=membership, amount=Decimal('80.00'), received_by='Desk')
+        Attendance.objects.create(member=member)
+        boxing = TrainingClass.objects.create(name='Scale Boxing', class_type=FitnessClassType.BOXING)
+        ClassSchedule.objects.create(
+            training_class=boxing,
+            weekday=0,
+            start_time=time(18, 0),
+            end_time=time(19, 0),
+        )
+        self.client.force_login(self.admin)
+        with CaptureQueriesContext(connection) as captured:
+            response = self._summary()
+        self.assertEqual(response.status_code, 200)
+        self.assertLessEqual(len(captured), 15)
+
+    def test_existing_dashboard_endpoint_is_unchanged(self):
+        self.client.force_login(self.admin)
+        response = self.client.get('/api/fitness/dashboard')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('whatsapp_due', response.json())
+        self.assertNotIn('attention', response.json())
 
 
 

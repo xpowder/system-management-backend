@@ -17,11 +17,12 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 from core.auth import gym_staff_auth
 from fitness.attendance import attendance_data, class_headcount, desk_member, list_today_visits, lookup_members, member_card_code, open_visit_today, qr_response, require_checkin_member
+from fitness.dashboard import build_dashboard_summary, parse_dashboard_date
 from fitness.exports import cash_log_pdf_response, cash_log_xlsx_response, monthly_pdf_response, monthly_xlsx_response
 from fitness.models import Attendance, ClassMember, ClassSchedule, ExpenseCategory, FitnessClassType, GymExpense, GymNotification, GymNotificationSettings, GymPayment, GymWhatsAppReminder, Membership, MembershipPlan, PaymentStatusOverride, Trainer, TrainerPayroll, TrainingClass
 from fitness.receipts import receipt_html_response, receipt_number, receipt_pdf_response
 from fitness.schedules import calendar_items, parse_calendar_bounds, parse_color, parse_group, parse_weekday, weekday_name, weekdays_in_range
-from fitness.schemas import AttendanceCheckOutIn, AttendanceDeskOut, AttendanceIn, AttendanceLookupOut, AttendanceOut, ClassCalendarOut, ClassMemberIn, ClassMemberOut, ClassRevenueReportOut, ClassScheduleIn, ClassScheduleOut, ExpenseCategoryTotalOut, GymExpenseIn, GymExpenseOut, GymPaymentIn, GymPaymentOut, Member360Out, MemberClassIn, MemberClassOut, MemberIn, MemberOut, MemberQrLookupOut, MembershipIn, MembershipOut, MembershipPriceIn, MembershipRemainingIn, MonthlyOverviewOut, NotificationOut, NotificationSettingsIn, NotificationSettingsOut, PaymentStatusUpdateIn, PlanIn, PlanOut, TrainerIn, TrainerOut, TrainerPayrollIn, TrainerPayrollReportOut, TrainingClassIn, TrainingClassOut, WhatsAppReminderListOut, WhatsAppReminderOut, WhatsAppReminderSentIn
+from fitness.schemas import AttendanceCheckOutIn, AttendanceDeskOut, AttendanceIn, AttendanceLookupOut, AttendanceOut, ClassCalendarOut, ClassMemberIn, ClassMemberOut, ClassRevenueReportOut, ClassScheduleIn, ClassScheduleOut, DashboardSummaryOut, ExpenseCategoryTotalOut, GymExpenseIn, GymExpenseOut, GymPaymentIn, GymPaymentOut, Member360Out, MemberClassIn, MemberClassOut, MemberIn, MemberOut, MemberQrLookupOut, MembershipIn, MembershipOut, MembershipPriceIn, MembershipRemainingIn, MonthlyOverviewOut, NotificationOut, NotificationSettingsIn, NotificationSettingsOut, PaymentStatusUpdateIn, PlanIn, PlanOut, TrainerIn, TrainerOut, TrainerPayrollIn, TrainerPayrollReportOut, TrainingClassIn, TrainingClassOut, WhatsAppReminderListOut, WhatsAppReminderOut, WhatsAppReminderSentIn
 from users.models import ClientProfile
 from users.permissions import is_admin
 
@@ -827,6 +828,12 @@ def _reminder_rows(member_id=None):
     return items
 
 
+@router.get('/fitness/dashboard/summary', response=DashboardSummaryOut)
+def dashboard_summary(request, date: Optional[str] = None):
+    """Gym-local daily summary. Counts only. Date is Africa/Casablanca calendar date."""
+    return build_dashboard_summary(parse_dashboard_date(date))
+
+
 @router.get('/fitness/dashboard')
 def gym_dashboard(request):
     today = timezone.localdate()
@@ -1491,6 +1498,11 @@ def check_out(request, payload: AttendanceCheckOutIn):
 @router.get('/fitness/members/{member_id}/qr')
 def member_qr(request, member_id: int):
     return qr_response(member_id)
+
+
+@router.get('/fitness/members/{member_id}/qr.png')
+def member_qr_png(request, member_id: int):
+    return qr_response(member_id, kind='png')
 
 
 @router.get('/fitness/trainers', response=List[TrainerOut])

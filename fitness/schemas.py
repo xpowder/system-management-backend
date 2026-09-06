@@ -500,3 +500,44 @@ class Member360Out(BaseModel):
     payments: List[GymPaymentOut]
     attendance: List[AttendanceOut]
     reminder: Optional[WhatsAppReminderOut] = None
+
+
+class DashboardAttendanceOut(BaseModel):
+    checked_in: int
+    inside: int
+
+
+class DashboardMembershipsOut(BaseModel):
+    active: int
+    expired: int
+    expiring_today: int
+
+
+class DashboardPaymentsOut(BaseModel):
+    today_total: Decimal
+    outstanding_total: Decimal
+
+
+class DashboardClassesOut(BaseModel):
+    today_count: int
+
+
+class DashboardTrainersOut(BaseModel):
+    today_count: int
+
+
+class DashboardAttentionOut(BaseModel):
+    expiring_today: int
+    expired: int
+    members_with_balance: int
+
+
+class DashboardSummaryOut(BaseModel):
+    date: date
+    timezone: str
+    attendance: DashboardAttendanceOut
+    memberships: DashboardMembershipsOut
+    payments: DashboardPaymentsOut
+    classes: DashboardClassesOut
+    trainers: DashboardTrainersOut
+    attention: DashboardAttentionOut

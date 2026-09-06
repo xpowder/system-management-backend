@@ -198,19 +198,30 @@ def require_checkin_member(member_id):
     return member
 
 
-def qr_response(member_id):
-    try:
-        member = ClientProfile.objects.get(id=member_id, is_active=True)
-    except ClientProfile.DoesNotExist:
-        raise HttpError(404, 'Member not found')
+def member_qr_code(member):
     if not member.qr_token:
         member.qr_token = generate_qr_token()
         member.save(update_fields=['qr_token'])
     try:
         import segno
     except ImportError:
+        return None
+    return segno.make(member.qr_token, error='m')
+
+
+def qr_response(member_id, kind='svg'):
+    try:
+        member = ClientProfile.objects.get(id=member_id, is_active=True)
+    except ClientProfile.DoesNotExist:
+        raise HttpError(404, 'Member not found')
+    qr = member_qr_code(member)
+    if qr is None:
         raise HttpError(503, 'QR codes are not available on this server')
-    qr = segno.make(member.qr_token, error='m')
     buffer = BytesIO()
+    if kind == 'png':
+        qr.save(buffer, kind='png', scale=8, border=2)
+        response = HttpResponse(buffer.getvalue(), content_type='image/png')
+        response['Content-Disposition'] = f'attachment; filename="FO-{int(member_id):06d}-qr.png"'
+        return response
     qr.save(buffer, kind='svg', scale=5, border=1)
     return HttpResponse(buffer.getvalue(), content_type='image/svg+xml')
