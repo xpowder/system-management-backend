@@ -1536,6 +1536,7 @@ class ClassScheduleCalendarApiTest(TestCase):
                 'start_time': '09:00:00',
                 'end_time': '10:00:00',
                 'location': 'Studio',
+                'group': 'kids',
                 'capacity': 8,
                 'is_active': True,
             }),
@@ -1545,6 +1546,7 @@ class ClassScheduleCalendarApiTest(TestCase):
         body = created.json()
         self.assertEqual(body['weekday'], 'friday')
         self.assertEqual(body['location'], 'Studio')
+        self.assertEqual(body['group'], 'kids')
         self.assertEqual(body['capacity'], 8)
         self.assertIsNone(body['trainer_id'])
         schedule_id = body['id']
@@ -1558,6 +1560,7 @@ class ClassScheduleCalendarApiTest(TestCase):
                 'end_time': '10:00:00',
                 'trainer_id': self.trainer.id,
                 'location': 'Studio 2',
+                'group': 'adults',
                 'capacity': 8,
                 'is_active': False,
             }),
@@ -1565,6 +1568,7 @@ class ClassScheduleCalendarApiTest(TestCase):
         )
         self.assertEqual(updated.status_code, 200)
         self.assertFalse(updated.json()['is_active'])
+        self.assertEqual(updated.json()['group'], 'adults')
         self.assertEqual(updated.json()['trainer_name'], 'Karim Coach')
         self.assertNotIn('monthly_pay', updated.json())
         self.assertEqual(
@@ -1606,6 +1610,7 @@ class ClassScheduleCalendarApiTest(TestCase):
         self.assertEqual(monday['trainer_id'], self.trainer.id)
         self.assertEqual(monday['trainer_name'], 'Karim Coach')
         self.assertEqual(monday['location'], 'Ring 1')
+        self.assertEqual(monday['group'], '')
         self.assertEqual(monday['capacity'], 12)
         self.assertEqual(monday['member_count'], 1)
         self.assertNotIn('available_spaces', monday)
@@ -1760,13 +1765,60 @@ class ClassScheduleCalendarApiTest(TestCase):
             {
                 'schedule_id', 'training_class_id', 'class_name', 'class_type', 'date',
                 'weekday', 'start_time', 'end_time', 'starts_at', 'ends_at',
-                'trainer_id', 'trainer_name', 'location', 'capacity', 'member_count',
+                'trainer_id', 'trainer_name', 'location', 'group', 'color', 'capacity', 'member_count',
                 'is_active',
             },
         )
         self.assertEqual(item['capacity'], 12)
         self.assertEqual(item['member_count'], 1)
         self.assertNotIn('available_spaces', item)
+
+    def test_schedule_group_is_the_calendar_name(self):
+        self.client.force_login(self.admin)
+        created = self.client.post(
+            '/api/fitness/classes/schedules',
+            data=json.dumps({
+                'training_class_id': self.boxing.id,
+                'weekday': 'thursday',
+                'start_time': '16:00:00',
+                'end_time': '17:00:00',
+                'group': 'boxing-kids',
+                'color': '#ef735c',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(created.json()['group'], 'boxing-kids')
+        self.assertEqual(created.json()['color'], '#ef735c')
+        body = self._calendar(start='2026-09-03', end='2026-09-03').json()
+        self.assertEqual(len(body['items']), 1)
+        self.assertEqual(body['items'][0]['class_name'], 'Morning Boxing')
+        self.assertEqual(body['items'][0]['group'], 'boxing-kids')
+        self.assertEqual(body['items'][0]['color'], '#ef735c')
+        invalid_color = self.client.post(
+            '/api/fitness/classes/schedules',
+            data=json.dumps({
+                'training_class_id': self.boxing.id,
+                'weekday': 'thursday',
+                'start_time': '17:00:00',
+                'end_time': '18:00:00',
+                'color': 'red',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(invalid_color.status_code, 400)
+        too_long = self.client.post(
+            '/api/fitness/classes/schedules',
+            data=json.dumps({
+                'training_class_id': self.boxing.id,
+                'weekday': 'thursday',
+                'start_time': '17:00:00',
+                'end_time': '18:00:00',
+                'group': 'x' * 81,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(too_long.status_code, 400)
 
     def test_calendar_range_is_capped_at_62_days(self):
         self.client.force_login(self.admin)
@@ -1819,6 +1871,117 @@ class ClassScheduleCalendarApiTest(TestCase):
         self.assertFalse(ClassSchedule.objects.filter(id=schedule_id).exists())
         self.assertTrue(ClientProfile.objects.filter(id=member.id).exists())
         self.assertFalse(ClassMember.objects.filter(client=member, training_class_id=self.boxing.id).exists())
+
+
+class MemberQrLookupApiTest(TestCase):
+    def setUp(self):
+        from bookings.tests.helpers import make_provider
+
+        self.admin = User.objects.create_user(username='qr-admin', is_staff=True)
+        self.reception = User.objects.create_user(username='qr-reception')
+        Group.objects.get_or_create(name='Reception')[0].user_set.add(self.reception)
+        self.super_admin = User.objects.create_user(username='qr-super')
+        Group.objects.get_or_create(name='Super Admin')[0].user_set.add(self.super_admin)
+        self.provider = make_provider(username='qr-provider')
+        member_user = User.objects.create_user(
+            username='qr-member-a',
+            first_name='Sara',
+            last_name='Benali',
+            email='sara@example.com',
+        )
+        self.member_a = ClientProfile.objects.create(
+            user=member_user,
+            phone='0611111111',
+            id_number='QR-CIN-A',
+            address='Hay Mohammadi',
+            city='Casablanca',
+        )
+        other_user = User.objects.create_user(username='qr-member-b', first_name='Omar', last_name='Ali')
+        self.member_b = ClientProfile.objects.create(user=other_user, phone='0622222222', id_number='QR-CIN-B')
+
+    def _lookup(self, token=None):
+        value = self.member_a.qr_token if token is None else token
+        return self.client.get(f'/api/fitness/members/qr/{value}')
+
+    def test_anonymous_gets_401(self):
+        self.assertEqual(self._lookup().status_code, 401)
+
+    def test_gym_member_trainer_and_provider_get_403(self):
+        member_login = User.objects.create_user(username='qr-self', password='password123')
+        ClientProfile.objects.create(user=member_login, id_number='QR-SELF')
+        self.client.force_login(member_login)
+        self.assertEqual(self._lookup().status_code, 403)
+        trainer = User.objects.create_user(username='qr-trainer', password='password123')
+        Group.objects.get_or_create(name='Trainer')[0].user_set.add(trainer)
+        self.client.force_login(trainer)
+        self.assertEqual(self._lookup().status_code, 403)
+        self.client.force_login(self.provider.user)
+        self.assertEqual(self._lookup().status_code, 403)
+
+    def test_reception_admin_super_admin_and_staff_can_resolve(self):
+        for user in (self.reception, self.admin, self.super_admin):
+            self.client.force_login(user)
+            response = self._lookup()
+            self.assertEqual(response.status_code, 200, user.username)
+            body = response.json()
+            self.assertEqual(body, {
+                'member_id': self.member_a.id,
+                'name': 'Sara Benali',
+                'is_active': True,
+            })
+
+    def test_invalid_and_unknown_tokens_are_404(self):
+        self.client.force_login(self.admin)
+        self.assertEqual(self._lookup('not-a-real-token').status_code, 404)
+        self.assertEqual(self._lookup('FO-%06d' % self.member_a.id).status_code, 404)
+        self.assertEqual(self.client.get('/api/fitness/members/qr/').status_code, 404)
+
+    def test_member_a_token_never_returns_member_b(self):
+        self.client.force_login(self.admin)
+        body = self._lookup(self.member_a.qr_token).json()
+        self.assertEqual(body['member_id'], self.member_a.id)
+        self.assertNotEqual(body['member_id'], self.member_b.id)
+        other = self._lookup(self.member_b.qr_token).json()
+        self.assertEqual(other['member_id'], self.member_b.id)
+        self.assertNotEqual(self.member_a.qr_token, self.member_b.qr_token)
+        self.assertFalse(self.member_a.qr_token.startswith('FO-'))
+        self.assertNotEqual(self.member_a.qr_token, str(self.member_a.id))
+
+    def test_response_does_not_expose_private_data(self):
+        self.client.force_login(self.admin)
+        body = self._lookup().json()
+        self.assertEqual(set(body), {'member_id', 'name', 'is_active'})
+        encoded = json.dumps(body)
+        for leaked in (
+            'QR-CIN-A', '0611111111', 'sara@example.com', 'Hay Mohammadi',
+            'payments', 'memberships', 'attendance', 'monthly_pay',
+            'expenses', 'notifications', 'id_number', 'phone', 'email',
+            'qr_token', self.member_a.qr_token,
+        ):
+            self.assertNotIn(leaked, encoded)
+
+    def test_inactive_member_still_resolves(self):
+        self.member_a.is_active = False
+        self.member_a.save(update_fields=['is_active', 'updated_at'])
+        self.client.force_login(self.reception)
+        body = self._lookup().json()
+        self.assertEqual(body['member_id'], self.member_a.id)
+        self.assertFalse(body['is_active'])
+        self.assertEqual(Attendance.objects.filter(member=self.member_a).count(), 0)
+
+    def test_existing_member_360_and_member_list_are_unchanged(self):
+        self.client.force_login(self.admin)
+        detail = self.client.get(f'/api/fitness/members/{self.member_a.id}')
+        self.assertEqual(detail.status_code, 200)
+        self.assertNotIn('qr_token', detail.json())
+        self.assertEqual(detail.json()['card_code'], f'FO-{self.member_a.id:06d}')
+        view_360 = self.client.get(f'/api/fitness/members/{self.member_a.id}/360')
+        self.assertEqual(view_360.status_code, 200)
+        self.assertEqual(view_360.json()['member']['id'], self.member_a.id)
+        self.assertNotIn('qr_token', view_360.json()['member'])
+        image = self.client.get(f'/api/fitness/members/{self.member_a.id}/qr')
+        self.assertEqual(image.status_code, 200)
+        self.assertIn('image/svg', image['Content-Type'])
 
 
 

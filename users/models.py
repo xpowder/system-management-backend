@@ -1,6 +1,13 @@
+import secrets
+
 from django.db import models
 from django.contrib.auth.models import User
 from core.models import BaseModel
+
+
+def generate_qr_token():
+    """Opaque membership-card token. Not derived from the member id or PII."""
+    return secrets.token_urlsafe(32)
 
 
 class UserRole(models.TextChoices):
@@ -29,6 +36,13 @@ class ClientProfile(BaseModel):
     postal_code = models.CharField(max_length=20, blank=True)
     id_number = models.CharField(max_length=50, unique=True, blank=True)
     is_active = models.BooleanField(default=True)
+    qr_token = models.CharField(
+        max_length=64,
+        unique=True,
+        default=generate_qr_token,
+        editable=False,
+        help_text='Opaque token encoded in the member QR card. Not a login credential.',
+    )
     
     class Meta:
         ordering = ['user__first_name', 'user__last_name']
@@ -36,6 +50,11 @@ class ClientProfile(BaseModel):
         verbose_name_plural = 'Client Profiles'
         indexes = [models.Index(fields=['is_active'])]
     
+    def save(self, *args, **kwargs):
+        if not self.qr_token:
+            self.qr_token = generate_qr_token()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name} (Client)"
 

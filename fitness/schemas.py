@@ -32,6 +32,8 @@ class ClassScheduleIn(BaseModel):
     end_time: time
     trainer_id: Optional[int] = None
     location: str = ''
+    group: str = ''
+    color: str = ''
     capacity: Optional[int] = Field(default=None, ge=1)
     is_active: bool = True
 
@@ -47,6 +49,8 @@ class ClassScheduleOut(BaseModel):
     trainer_id: Optional[int] = None
     trainer_name: Optional[str] = None
     location: str = ''
+    group: str = ''
+    color: str = ''
     capacity: Optional[int] = None
     is_active: bool
 
@@ -65,6 +69,8 @@ class CalendarOccurrenceOut(BaseModel):
     trainer_id: Optional[int] = None
     trainer_name: Optional[str] = None
     location: str = ''
+    group: str = ''
+    color: str = ''
     capacity: Optional[int] = None
     member_count: int
     is_active: bool
@@ -247,6 +253,12 @@ class MemberOut(BaseModel):
     card_code: str = ''
     class_id: Optional[int] = None
     class_name: str = ''
+
+
+class MemberQrLookupOut(BaseModel):
+    member_id: int
+    name: str
+    is_active: bool
 
 
 class Member360ClassOut(BaseModel):

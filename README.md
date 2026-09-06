@@ -278,6 +278,13 @@ curl -X POST http://127.0.0.1:8000/api/fitness/classes/schedules \
 # Empty memberships/payments/attendance return [] and reminder is null.
 # Attendance is the 50 most recent visits for that member.
 curl http://127.0.0.1:8000/api/fitness/members/1/360
+
+# Resolve a scanned member QR token (gym staff session). Reception, Admin,
+# Super Admin, or is_staff. Anonymous 401. Gym member / Trainer / provider 403.
+# Unknown token 404. The QR encodes an opaque qr_token only — not name, CIN,
+# phone, member id, or payment data. Possession of the token is not login.
+# Inactive members still resolve with is_active=false; check-in is not performed.
+curl http://127.0.0.1:8000/api/fitness/members/qr/OPAQUE_TOKEN
 ```
 
 The Django admin also shows each class's member count and automatic team total in MAD.

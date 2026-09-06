@@ -8,7 +8,7 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from fitness.models import Attendance, ClassMember, Membership, TrainingClass
-from users.models import ClientProfile
+from users.models import ClientProfile, generate_qr_token
 
 CHECKIN_STATUSES = {'active', 'expiring_soon'}
 CARD_RE = re.compile(r'^(?:FO-?)(\d+)$', re.I)
@@ -203,11 +203,14 @@ def qr_response(member_id):
         member = ClientProfile.objects.get(id=member_id, is_active=True)
     except ClientProfile.DoesNotExist:
         raise HttpError(404, 'Member not found')
+    if not member.qr_token:
+        member.qr_token = generate_qr_token()
+        member.save(update_fields=['qr_token'])
     try:
         import segno
     except ImportError:
         raise HttpError(503, 'QR codes are not available on this server')
-    qr = segno.make(member_card_code(member.id), error='m')
+    qr = segno.make(member.qr_token, error='m')
     buffer = BytesIO()
     qr.save(buffer, kind='svg', scale=5, border=1)
     return HttpResponse(buffer.getvalue(), content_type='image/svg+xml')

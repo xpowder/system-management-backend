@@ -1,4 +1,5 @@
 """Weekly class-schedule expansion for the gym calendar."""
+import re
 from datetime import date, datetime, timedelta
 
 from django.utils import timezone
@@ -17,6 +18,8 @@ WEEKDAY_NAME_TO_INT = {
     'sunday': 6,
 }
 WEEKDAY_INT_TO_NAME = {value: key for key, value in WEEKDAY_NAME_TO_INT.items()}
+GROUP_MAX_LEN = 80
+COLOR_RE = re.compile(r'^#?[0-9a-fA-F]{6}$')
 
 
 def parse_weekday(value):
@@ -37,6 +40,23 @@ def weekday_name(value):
             400,
             'weekday must be monday, tuesday, wednesday, thursday, friday, saturday, or sunday',
         )
+
+
+def parse_group(value):
+    raw = (value or '').strip()
+    if len(raw) > GROUP_MAX_LEN:
+        raise HttpError(400, f'group cannot exceed {GROUP_MAX_LEN} characters')
+    return raw
+
+
+def parse_color(value):
+    raw = (value or '').strip()
+    if not raw:
+        return ''
+    if not COLOR_RE.match(raw):
+        raise HttpError(400, 'color must be a hex value like #ef735c')
+    hex_value = raw if raw.startswith('#') else f'#{raw}'
+    return hex_value.lower()
 
 
 def parse_calendar_bounds(from_value, to_value):
@@ -108,6 +128,8 @@ def calendar_items(schedules, start, end):
                 'trainer_id': trainer.id if trainer else None,
                 'trainer_name': trainer.name if trainer else None,
                 'location': schedule.location or '',
+                'group': getattr(schedule, 'group', '') or '',
+                'color': getattr(schedule, 'color', '') or '',
                 'capacity': schedule.capacity,
                 'member_count': int(roster),
                 'is_active': True,

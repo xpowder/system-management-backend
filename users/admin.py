@@ -7,11 +7,11 @@ class ClientProfileAdmin(admin.ModelAdmin):
     list_display = ('get_full_name', 'phone', 'city', 'id_number', 'created_at')
     list_filter = ('city', 'country', 'created_at')
     search_fields = ('user__first_name', 'user__last_name', 'phone', 'id_number')
-    readonly_fields = ('created_at', 'updated_at')
+    readonly_fields = ('qr_token', 'created_at', 'updated_at')
     
     fieldsets = (
         ('User Information', {
-            'fields': ('user',)
+            'fields': ('user', 'is_active', 'qr_token')
         }),
         ('Personal Information', {
             'fields': ('phone', 'id_number')

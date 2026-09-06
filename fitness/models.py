@@ -263,6 +263,18 @@ class ClassSchedule(BaseModel):
         related_name='class_schedules',
     )
     location = models.CharField(max_length=150, blank=True)
+    group = models.CharField(
+        max_length=80,
+        blank=True,
+        default='',
+        help_text='Optional calendar name for this weekly slot, for example boxing-kids.',
+    )
+    color = models.CharField(
+        max_length=7,
+        blank=True,
+        default='',
+        help_text='Optional calendar color as #RRGGBB.',
+    )
     capacity = models.PositiveIntegerField(
         null=True,
         blank=True,

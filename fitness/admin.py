@@ -13,7 +13,7 @@ class ClassScheduleInline(admin.TabularInline):
     model = ClassSchedule
     extra = 0
     autocomplete_fields = ('trainer',)
-    fields = ('weekday', 'start_time', 'end_time', 'trainer', 'location', 'capacity', 'is_active')
+    fields = ('weekday', 'start_time', 'end_time', 'trainer', 'location', 'group', 'color', 'capacity', 'is_active')
 
 
 @admin.register(TrainingClass)
@@ -45,9 +45,9 @@ class TrainingClassAdmin(admin.ModelAdmin):
 class ClassScheduleAdmin(admin.ModelAdmin):
     list_display = (
         'training_class', 'weekday', 'start_time', 'end_time',
-        'trainer', 'location', 'capacity', 'is_active',
+        'trainer', 'location', 'group', 'color', 'capacity', 'is_active',
     )
-    list_filter = ('weekday', 'is_active', 'training_class')
+    list_filter = ('weekday', 'group', 'is_active', 'training_class')
     search_fields = ('training_class__name', 'location', 'trainer__first_name', 'trainer__last_name')
     autocomplete_fields = ('training_class', 'trainer')
     readonly_fields = ('created_at', 'updated_at')

@@ -20,8 +20,8 @@ from fitness.attendance import attendance_data, class_headcount, desk_member, li
 from fitness.exports import cash_log_pdf_response, cash_log_xlsx_response, monthly_pdf_response, monthly_xlsx_response
 from fitness.models import Attendance, ClassMember, ClassSchedule, ExpenseCategory, FitnessClassType, GymExpense, GymNotification, GymNotificationSettings, GymPayment, GymWhatsAppReminder, Membership, MembershipPlan, PaymentStatusOverride, Trainer, TrainerPayroll, TrainingClass
 from fitness.receipts import receipt_html_response, receipt_number, receipt_pdf_response
-from fitness.schedules import calendar_items, parse_calendar_bounds, parse_weekday, weekday_name, weekdays_in_range
-from fitness.schemas import AttendanceCheckOutIn, AttendanceDeskOut, AttendanceIn, AttendanceLookupOut, AttendanceOut, ClassCalendarOut, ClassMemberIn, ClassMemberOut, ClassRevenueReportOut, ClassScheduleIn, ClassScheduleOut, ExpenseCategoryTotalOut, GymExpenseIn, GymExpenseOut, GymPaymentIn, GymPaymentOut, Member360Out, MemberClassIn, MemberClassOut, MemberIn, MemberOut, MembershipIn, MembershipOut, MembershipPriceIn, MembershipRemainingIn, MonthlyOverviewOut, NotificationOut, NotificationSettingsIn, NotificationSettingsOut, PaymentStatusUpdateIn, PlanIn, PlanOut, TrainerIn, TrainerOut, TrainerPayrollIn, TrainerPayrollReportOut, TrainingClassIn, TrainingClassOut, WhatsAppReminderListOut, WhatsAppReminderOut, WhatsAppReminderSentIn
+from fitness.schedules import calendar_items, parse_calendar_bounds, parse_color, parse_group, parse_weekday, weekday_name, weekdays_in_range
+from fitness.schemas import AttendanceCheckOutIn, AttendanceDeskOut, AttendanceIn, AttendanceLookupOut, AttendanceOut, ClassCalendarOut, ClassMemberIn, ClassMemberOut, ClassRevenueReportOut, ClassScheduleIn, ClassScheduleOut, ExpenseCategoryTotalOut, GymExpenseIn, GymExpenseOut, GymPaymentIn, GymPaymentOut, Member360Out, MemberClassIn, MemberClassOut, MemberIn, MemberOut, MemberQrLookupOut, MembershipIn, MembershipOut, MembershipPriceIn, MembershipRemainingIn, MonthlyOverviewOut, NotificationOut, NotificationSettingsIn, NotificationSettingsOut, PaymentStatusUpdateIn, PlanIn, PlanOut, TrainerIn, TrainerOut, TrainerPayrollIn, TrainerPayrollReportOut, TrainingClassIn, TrainingClassOut, WhatsAppReminderListOut, WhatsAppReminderOut, WhatsAppReminderSentIn
 from users.models import ClientProfile
 from users.permissions import is_admin
 
@@ -340,6 +340,8 @@ def schedule_data(schedule):
         'trainer_id': trainer.id if trainer else None,
         'trainer_name': trainer.name if trainer else None,
         'location': schedule.location or '',
+        'group': getattr(schedule, 'group', '') or '',
+        'color': getattr(schedule, 'color', '') or '',
         'capacity': schedule.capacity,
         'is_active': schedule.is_active,
     }
@@ -356,6 +358,8 @@ def _apply_schedule_payload(schedule, payload):
     schedule.end_time = payload.end_time
     schedule.trainer = _resolve_schedule_trainer(payload.trainer_id)
     schedule.location = (payload.location or '').strip()
+    schedule.group = parse_group(getattr(payload, 'group', ''))
+    schedule.color = parse_color(getattr(payload, 'color', ''))
     schedule.capacity = payload.capacity
     schedule.is_active = payload.is_active
     try:
@@ -949,6 +953,24 @@ def list_members(request, search: Optional[str] = None):
             | Q(address__icontains=search)
         )
     return [member_data(item) for item in queryset[:500]]
+
+
+@router.get('/fitness/members/qr/{token}', response=MemberQrLookupOut)
+def resolve_member_qr(request, token: str):
+    """Resolve an opaque member QR token to identity only. Gym staff session required."""
+    value = (token or '').strip()
+    if not value:
+        raise HttpError(404, 'Member not found')
+    try:
+        member = ClientProfile.objects.select_related('user').get(qr_token=value)
+    except ClientProfile.DoesNotExist:
+        raise HttpError(404, 'Member not found')
+    name = f'{member.user.first_name} {member.user.last_name}'.strip() or member.user.username
+    return {
+        'member_id': member.id,
+        'name': name,
+        'is_active': member.is_active,
+    }
 
 
 @router.get('/fitness/members/{member_id}', response=MemberOut)
