@@ -125,13 +125,21 @@ def build_databases(
     pg_password="",
     pg_host="",
     pg_port="5432",
+    test_database_url="",
 ):
     """Prefer a URL (Railway DATABASE_URL), then PG* vars, else local SQLite.
 
-    Tests always use SQLite so a production DATABASE_URL in the environment
-    cannot point unit tests at Railway.
+    Unit tests default to SQLite so a production DATABASE_URL cannot be used.
+    Opt into local Postgres QA with HOMEZUP_TEST_DATABASE_URL only (never Railway).
     """
     if testing:
+        test_url = (test_database_url or "").strip()
+        if test_url:
+            if _is_internal(test_url) or "rlwy.net" in test_url.lower() or "proxy.rlwy" in test_url.lower():
+                raise ImproperlyConfigured(
+                    "HOMEZUP_TEST_DATABASE_URL must point at a local Postgres instance, not Railway."
+                )
+            return {"default": postgres_database_from_url(test_url)}
         return {"default": sqlite_database(base_dir)}
 
     url = pick_database_url(

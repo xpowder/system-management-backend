@@ -6,7 +6,7 @@ from django.contrib.auth.models import Group, User
 from django.test import TestCase
 from django.utils import timezone
 
-from fitness.models import Attendance, ClassMember, ClassSchedule, FitnessClassType, GymExpense, GymNotification, GymPayment, GymWhatsAppReminder, Membership, MembershipPlan, Trainer, TrainerPayroll, TrainingClass
+from fitness.models import Attendance, ClassMember, ClassSchedule, FitnessClassType, GymExpense, GymNotification, GymPayment, GymWhatsAppReminder, Membership, MembershipPlan, Trainer, TrainerPayroll, TrainingClass, membership_paid_total_annotation
 from fitness.controllers import create_expiring_membership_notifications
 from users.models import ClientProfile
 
@@ -2408,5 +2408,139 @@ class PaymentIntegrityApiTest(TestCase):
             Decimal('1320.00'),
         )
 
+
+class MembershipPaidDueLogicTest(TestCase):
+    """Paid/due must be scoped to THIS membership period only (tests A–G)."""
+
+    def setUp(self):
+        self.staff = User.objects.create_user(username='paid-due-staff', is_staff=True)
+        self.client.force_login(self.staff)
+        self.plan = MembershipPlan.objects.create(name='Standard', duration_months=1, price=Decimal('120.00'))
+        user_a = User.objects.create_user(username='paid-due-a', first_name='Hamza', last_name='A')
+        self.member_a = ClientProfile.objects.create(user=user_a, id_number='PD-A')
+        user_b = User.objects.create_user(username='paid-due-b', first_name='Yassine', last_name='B')
+        self.member_b = ClientProfile.objects.create(user=user_b, id_number='PD-B')
+
+    def _membership(self, member, price='120.00', start='2026-09-01', end='2026-10-01'):
+        return Membership.objects.create(
+            member=member,
+            plan=self.plan,
+            start_date=start,
+            end_date=end,
+            price=Decimal(price),
+        )
+
+    def _pay_row(self, membership, amount):
+        return GymPayment.objects.create(
+            membership=membership,
+            amount=Decimal(amount),
+            received_by='Desk',
+            status='paid',
+        )
+
+    def _api_row(self, membership_id):
+        rows = self.client.get('/api/fitness/memberships').json()
+        return next(item for item in rows if item['id'] == membership_id)
+
+    def _assert_amounts(self, membership, paid, due, status):
+        membership.refresh_from_db()
+        self.assertEqual(membership.total_paid, Decimal(paid))
+        self.assertEqual(membership.remaining_balance, Decimal(due))
+        annotated = Membership.objects.annotate(paid_total=membership_paid_total_annotation()).get(id=membership.id)
+        self.assertEqual(annotated.paid_total, Decimal(paid))
+        row = self._api_row(membership.id)
+        self.assertEqual(Decimal(str(row['price'])), membership.price)
+        self.assertEqual(Decimal(str(row['total_paid'])), Decimal(paid))
+        self.assertEqual(Decimal(str(row['remaining_balance'])), Decimal(due))
+        self.assertEqual(row['payment_status'], status)
+
+    def test_a_unpaid(self):
+        m = self._membership(self.member_a)
+        self._assert_amounts(m, '0.00', '120.00', 'unpaid')
+
+    def test_b_partial_payment(self):
+        m = self._membership(self.member_a)
+        self._pay_row(m, '100.00')
+        self._assert_amounts(m, '100.00', '20.00', 'partial')
+
+    def test_c_fully_paid(self):
+        m = self._membership(self.member_a)
+        self._pay_row(m, '120.00')
+        self._assert_amounts(m, '120.00', '0.00', 'paid')
+
+    def test_d_multiple_payments(self):
+        m = self._membership(self.member_a)
+        self._pay_row(m, '50.00')
+        self._pay_row(m, '50.00')
+        self._assert_amounts(m, '100.00', '20.00', 'partial')
+
+    def test_e_payment_from_another_membership_isolated(self):
+        membership_a = self._membership(self.member_a)
+        membership_b = self._membership(self.member_b)
+        self._pay_row(membership_a, '100.00')
+        self._pay_row(membership_b, '120.00')
+        self._assert_amounts(membership_a, '100.00', '20.00', 'partial')
+        self._assert_amounts(membership_b, '120.00', '0.00', 'paid')
+
+    def test_f_historical_period_payments_do_not_bleed(self):
+        previous = self._membership(self.member_a, start='2026-07-01', end='2026-08-01')
+        current = self._membership(self.member_a, start='2026-09-01', end='2026-10-01')
+        self._pay_row(previous, '120.00')
+        self._pay_row(current, '100.00')
+        self._assert_amounts(previous, '120.00', '0.00', 'paid')
+        self._assert_amounts(current, '100.00', '20.00', 'partial')
+        body = self.client.get(f'/api/fitness/members/{self.member_a.id}/360').json()
+        by_id = {item['id']: item for item in body['memberships']}
+        self.assertEqual(Decimal(str(by_id[previous.id]['total_paid'])), Decimal('120.00'))
+        self.assertEqual(Decimal(str(by_id[current.id]['total_paid'])), Decimal('100.00'))
+        self.assertEqual(Decimal(str(by_id[current.id]['remaining_balance'])), Decimal('20.00'))
+
+    def test_g_overpayment_due_zero_rows_unchanged(self):
+        m = self._membership(self.member_a, price='130.00')
+        payment = self._pay_row(m, '1320.00')
+        original_amount = payment.amount
+        original_id = payment.id
+        self._assert_amounts(m, '1320.00', '0.00', 'paid')
+        payment.refresh_from_db()
+        self.assertEqual(payment.id, original_id)
+        self.assertEqual(payment.amount, original_amount)
+        self.assertEqual(GymPayment.objects.filter(membership=m).count(), 1)
+        blocked = self.client.delete(f'/api/fitness/memberships/{m.id}')
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(GymPayment.objects.filter(membership=m).count(), 1)
+        self.assertEqual(GymPayment.objects.get(id=original_id).amount, original_amount)
+
+    def test_payment_create_binds_url_membership_id(self):
+        membership_a = self._membership(self.member_a)
+        membership_b = self._membership(self.member_b)
+        response = self.client.post(
+            f'/api/fitness/memberships/{membership_a.id}/payments',
+            data=json.dumps({'amount': '100.00', 'received_by': 'Desk', 'notes': ''}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        payment = GymPayment.objects.get(id=response.json()['id'])
+        self.assertEqual(payment.membership_id, membership_a.id)
+        self.assertEqual(membership_a.total_paid, Decimal('100.00'))
+        self.assertEqual(membership_b.total_paid, Decimal('0.00'))
+
+    def test_recording_payment_clears_status_override(self):
+        m = self._membership(self.member_a)
+        m.payment_status_override = 'unpaid'
+        m.save(update_fields=['payment_status_override'])
+        response = self.client.post(
+            f'/api/fitness/memberships/{m.id}/payments',
+            data=json.dumps({'amount': '100.00', 'received_by': 'Desk', 'notes': ''}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        m.refresh_from_db()
+        self.assertEqual(m.payment_status_override, '')
+        self._assert_amounts(m, '100.00', '20.00', 'partial')
+
+    def test_membership_list_includes_member_name(self):
+        m = self._membership(self.member_a)
+        row = self._api_row(m.id)
+        self.assertEqual(row['member_name'], 'Hamza A')
 
 

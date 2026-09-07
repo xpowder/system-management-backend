@@ -130,6 +130,7 @@ DATABASES = build_databases(
     pg_password=config("PGPASSWORD", default=""),
     pg_host=config("PGHOST", default=""),
     pg_port=config("PGPORT", default="5432"),
+    test_database_url=config("HOMEZUP_TEST_DATABASE_URL", default=""),
 )
 
 CACHES = cache_settings(TESTING, DEBUG)

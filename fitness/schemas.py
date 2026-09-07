@@ -280,6 +280,7 @@ class Member360MemberOut(MemberOut):
 class Member360MembershipOut(BaseModel):
     id: int
     member_id: int
+    member_name: str = ''
     plan_id: int
     plan: Member360PlanOut
     start_date: date
@@ -378,6 +379,7 @@ class MembershipIn(BaseModel):
 class MembershipOut(BaseModel):
     id: int
     member_id: int
+    member_name: str = ''
     plan_id: int
     start_date: date
     end_date: date

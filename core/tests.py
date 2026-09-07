@@ -78,6 +78,24 @@ class DatabaseSettingsTests(TestCase):
         )
         self.assertIn("sqlite3", databases["default"]["ENGINE"])
 
+    def test_opt_in_local_postgres_for_tests(self):
+        from django.core.exceptions import ImproperlyConfigured
+        from homezup.database import build_databases
+
+        databases = build_databases(
+            Path("."),
+            testing=True,
+            test_database_url="postgresql://homezup_test@127.0.0.1:55432/homezup_test",
+        )
+        self.assertIn("postgresql", databases["default"]["ENGINE"])
+        self.assertEqual(databases["default"]["HOST"], "127.0.0.1")
+        with self.assertRaises(ImproperlyConfigured):
+            build_databases(
+                Path("."),
+                testing=True,
+                test_database_url="postgres://user:pass@xxx.proxy.rlwy.net:5432/railway",
+            )
+
     def test_database_url_uses_postgres(self):
         from homezup.database import build_databases
 

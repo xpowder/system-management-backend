@@ -19,7 +19,7 @@ from core.auth import gym_staff_auth
 from fitness.attendance import attendance_data, class_headcount, desk_member, list_today_visits, lookup_members, member_card_code, open_visit_today, qr_response, require_checkin_member
 from fitness.dashboard import build_dashboard_summary, parse_dashboard_date
 from fitness.exports import cash_log_pdf_response, cash_log_xlsx_response, monthly_pdf_response, monthly_xlsx_response
-from fitness.models import Attendance, ClassMember, ClassSchedule, ExpenseCategory, FitnessClassType, GymExpense, GymNotification, GymNotificationSettings, GymPayment, GymWhatsAppReminder, Membership, MembershipPlan, PaymentStatusOverride, Trainer, TrainerPayroll, TrainingClass
+from fitness.models import Attendance, ClassMember, ClassSchedule, ExpenseCategory, FitnessClassType, GymExpense, GymNotification, GymNotificationSettings, GymPayment, GymWhatsAppReminder, Membership, MembershipPlan, PaymentStatusOverride, Trainer, TrainerPayroll, TrainingClass, membership_paid_total_annotation
 from fitness.receipts import receipt_html_response, receipt_number, receipt_pdf_response
 from fitness.schedules import calendar_items, parse_calendar_bounds, parse_color, parse_group, parse_weekday, weekday_name, weekdays_in_range
 from fitness.schemas import AttendanceCheckOutIn, AttendanceDeskOut, AttendanceIn, AttendanceLookupOut, AttendanceOut, ClassCalendarOut, ClassMemberIn, ClassMemberOut, ClassRevenueReportOut, ClassScheduleIn, ClassScheduleOut, DashboardSummaryOut, ExpenseCategoryTotalOut, GymExpenseIn, GymExpenseOut, GymPaymentIn, GymPaymentOut, Member360Out, MemberClassIn, MemberClassOut, MemberIn, MemberOut, MemberQrLookupOut, MembershipIn, MembershipOut, MembershipPriceIn, MembershipRemainingIn, MonthlyOverviewOut, NotificationOut, NotificationSettingsIn, NotificationSettingsOut, PaymentStatusUpdateIn, PlanIn, PlanOut, TrainerIn, TrainerOut, TrainerPayrollIn, TrainerPayrollReportOut, TrainingClassIn, TrainingClassOut, WhatsAppReminderListOut, WhatsAppReminderOut, WhatsAppReminderSentIn
@@ -556,12 +556,8 @@ def member_data(member):
 
 
 def _paid_total_annotation():
-    zero = Decimal('0.00')
-    return Coalesce(
-        Sum('payments__amount', filter=Q(payments__status='paid')),
-        Value(zero),
-        output_field=DecimalField(max_digits=12, decimal_places=2),
-    )
+    """Membership-scoped paid total (Subquery — never inflates via joins)."""
+    return membership_paid_total_annotation()
 
 
 def _memberships_with_paid_total():
@@ -589,9 +585,16 @@ def membership_data(item):
         payment_status = 'partial'
     else:
         payment_status = 'unpaid'
+    member = getattr(item, 'member', None)
+    user = getattr(member, 'user', None) if member is not None else None
+    if user is not None:
+        member_name = f'{user.first_name} {user.last_name}'.strip() or user.username
+    else:
+        member_name = ''
     return {
         'id': item.id,
         'member_id': item.member_id,
+        'member_name': member_name,
         'plan_id': item.plan_id,
         'start_date': item.start_date,
         'end_date': item.end_date,
@@ -842,7 +845,7 @@ def gym_dashboard(request):
     active = memberships.filter(start_date__lte=today, end_date__gte=today).count()
     expiring = memberships.filter(end_date=today + timedelta(days=7)).count()
     payments = GymPayment.objects.filter(status='paid', received_at__date__gte=month_start)
-    paid_totals = memberships.annotate(paid_total=Sum('payments__amount', filter=Q(payments__status='paid'))).values_list('price', 'paid_total')
+    paid_totals = memberships.annotate(paid_total=_paid_total_annotation()).values_list('price', 'paid_total')
     outstanding = sum((max(price - (paid or Decimal('0.00')), Decimal('0.00')) for price, paid in paid_totals), Decimal('0.00'))
     recent_members = ClientProfile.objects.select_related('user').order_by('-created_at')[:5]
     reminder_count = _reminder_membership_qs().count()
@@ -874,11 +877,7 @@ def class_revenue_report(request, year: Optional[int] = None, month: Optional[in
     }
     outstanding_by_member = {}
     membership_rows = Membership.objects.annotate(
-        paid_total=Coalesce(
-            Sum('payments__amount', filter=Q(payments__status='paid')),
-            Value(zero),
-            output_field=DecimalField(max_digits=12, decimal_places=2),
-        )
+        paid_total=_paid_total_annotation()
     ).values('member_id', 'price', 'paid_total')
     for row in membership_rows:
         remaining = max(row['price'] - (row['paid_total'] or zero), zero)
@@ -951,14 +950,19 @@ def list_members(request, search: Optional[str] = None):
         )
     )
     if search:
-        queryset = queryset.filter(
-            Q(user__first_name__icontains=search)
-            | Q(user__last_name__icontains=search)
-            | Q(phone__icontains=search)
-            | Q(user__email__icontains=search)
-            | Q(id_number__icontains=search)
-            | Q(address__icontains=search)
+        term = search.strip()
+        query = (
+            Q(user__first_name__icontains=term)
+            | Q(user__last_name__icontains=term)
+            | Q(phone__icontains=term)
+            | Q(user__email__icontains=term)
+            | Q(id_number__icontains=term)
+            | Q(address__icontains=term)
         )
+        parts = [part for part in term.split() if part]
+        if len(parts) >= 2:
+            query |= Q(user__first_name__icontains=parts[0], user__last_name__icontains=parts[-1])
+        queryset = queryset.filter(query)
     return [member_data(item) for item in queryset[:500]]
 
 
@@ -1317,6 +1321,8 @@ def delete_membership(request, membership_id: int):
         item = Membership.objects.select_related('member__user', 'plan').get(id=membership_id)
     except Membership.DoesNotExist:
         raise HttpError(404, 'Membership not found')
+    if item.payments.exists():
+        raise HttpError(409, 'This membership has payment records and cannot be deleted.')
     member_id = item.member_id
     message = f'{item.member.user.get_full_name()} {item.plan.name} membership was deleted.'
     item.delete()
@@ -1418,6 +1424,9 @@ def record_gym_payment(request, membership_id: int, payload: GymPaymentIn):
             received_by=_received_by_for_payment(request, payload.received_by),
             notes=payload.notes,
         )
+        if membership.payment_status_override:
+            membership.payment_status_override = ''
+            membership.save(update_fields=['payment_status_override', 'updated_at'])
     member_name = membership.member.user.get_full_name()
     create_gym_notifications('payment_received', 'payments', 'Payment received', f'{member_name} paid {payment.amount} MAD.', membership.member_id, request.user)
     remaining_after = membership.price - _paid_payments_total(membership)

@@ -7,7 +7,7 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 from ninja.errors import HttpError
 
-from fitness.models import Attendance, ClassSchedule, GymPayment, Membership
+from fitness.models import Attendance, ClassSchedule, GymPayment, Membership, membership_paid_total_annotation
 
 
 ZERO = Decimal('0.00')
@@ -37,11 +37,7 @@ def _covering(day):
 
 
 def _paid_total_annotation():
-    return Coalesce(
-        Sum('payments__amount', filter=Q(payments__status='paid')),
-        Value(ZERO),
-        output_field=MONEY,
-    )
+    return membership_paid_total_annotation()
 
 
 def _remaining_annotation():

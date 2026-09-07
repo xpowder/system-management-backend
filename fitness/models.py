@@ -1,12 +1,18 @@
-from datetime import date
 from decimal import Decimal
 
 from django.core.validators import MinValueValidator
 from django.db import models
 from django.conf import settings
+from django.db.models import DecimalField, OuterRef, Subquery, Sum, Value
+from django.db.models.functions import Coalesce
+from django.utils import timezone
 
 from core.models import BaseModel
 from users.models import ClientProfile
+
+
+def gym_today():
+    return timezone.localdate()
 
 
 class GymNotificationSettings(BaseModel):
@@ -157,7 +163,7 @@ class Membership(BaseModel):
     def status(self):
         if self.status_override:
             return self.status_override
-        today = date.today()
+        today = gym_today()
         if self.end_date < today:
             return 'expired'
         if self.start_date <= today <= self.end_date:
@@ -166,6 +172,7 @@ class Membership(BaseModel):
 
     @property
     def total_paid(self):
+        """Paid amount for this membership period only (related payments FK)."""
         return self.payments.filter(status='paid').aggregate(total=models.Sum('amount'))['total'] or Decimal('0.00')
 
     @property
@@ -198,6 +205,22 @@ class GymPayment(BaseModel):
             models.Index(fields=['membership', 'status']),
             models.Index(fields=['received_at']),
         ]
+
+
+def membership_paid_total_annotation():
+    """Annotate Membership rows with paid total for THIS membership only."""
+    paid_sub = (
+        GymPayment.objects.filter(membership_id=OuterRef('pk'), status='paid')
+        .values('membership_id')
+        .annotate(total=Sum('amount'))
+        .values('total')[:1]
+    )
+    money = DecimalField(max_digits=12, decimal_places=2)
+    return Coalesce(
+        Subquery(paid_sub, output_field=money),
+        Value(Decimal('0.00')),
+        output_field=money,
+    )
 
 
 class Attendance(BaseModel):
