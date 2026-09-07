@@ -695,3 +695,191 @@ class CorsAndSecretExposureTests(TestCase):
         self.assertTrue(settings.CORS_ALLOW_CREDENTIALS)
         self.assertFalse(getattr(settings, 'CORS_ALLOW_ALL_ORIGINS', False))
         self.assertNotIn('*', settings.CORS_ALLOWED_ORIGINS)
+        self.assertIn('X-Total-Count', settings.CORS_EXPOSE_HEADERS)
+        self.assertIn('X-Limit', settings.CORS_EXPOSE_HEADERS)
+        self.assertIn('X-Offset', settings.CORS_EXPOSE_HEADERS)
+        self.assertIn('X-Has-More', settings.CORS_EXPOSE_HEADERS)
+
+
+class LoginCsrfSessionTests(TestCase):
+    """Login bootstraps the session cookie; authenticated mutations still require CSRF."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            username='csrf-login',
+            password='correct-password',
+            is_staff=True,
+            first_name='Csrf',
+            last_name='Staff',
+        )
+
+    def tearDown(self):
+        cache.clear()
+
+    def _csrf_client(self):
+        client = Client(enforce_csrf_checks=True)
+        client.get('/api/auth/me')
+        return client
+
+    def test_valid_login_without_csrf_establishes_a_session(self):
+        client = self._csrf_client()
+        response = client.post(
+            '/api/auth/login',
+            data=json.dumps({'username': 'csrf-login', 'password': 'correct-password'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['username'], 'csrf-login')
+        self.assertEqual(client.get('/api/auth/me').status_code, 200)
+
+    def test_valid_login_with_csrf_also_succeeds(self):
+        client = self._csrf_client()
+        token = client.cookies['csrftoken'].value
+        response = client.post(
+            '/api/auth/login',
+            data=json.dumps({'username': 'csrf-login', 'password': 'correct-password'}),
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=token,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(client.get('/api/auth/me').status_code, 200)
+
+    def test_invalid_login_without_csrf_is_still_401(self):
+        client = self._csrf_client()
+        response = client.post(
+            '/api/auth/login',
+            data=json.dumps({'username': 'csrf-login', 'password': 'wrong-password'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(client.get('/api/auth/me').status_code, 401)
+
+    def test_authenticated_mutation_requires_csrf(self):
+        client = self._csrf_client()
+        login = client.post(
+            '/api/auth/login',
+            data=json.dumps({'username': 'csrf-login', 'password': 'correct-password'}),
+            content_type='application/json',
+        )
+        self.assertEqual(login.status_code, 200)
+        denied = client.post(
+            '/api/fitness/members',
+            data=json.dumps({
+                'first_name': 'No',
+                'last_name': 'Token',
+                'id_number': 'CSRF-MEM-1',
+                'phone': '0600000001',
+                'address': 'x',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(denied.status_code, 403)
+        token = client.cookies['csrftoken'].value
+        allowed = client.post(
+            '/api/fitness/members',
+            data=json.dumps({
+                'first_name': 'Has',
+                'last_name': 'Token',
+                'id_number': 'CSRF-MEM-1',
+                'phone': '0600000001',
+                'address': 'x',
+            }),
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=token,
+        )
+        self.assertEqual(allowed.status_code, 200)
+
+    def test_logout_without_csrf_clears_the_session(self):
+        client = self._csrf_client()
+        self.assertEqual(
+            client.post(
+                '/api/auth/login',
+                data=json.dumps({'username': 'csrf-login', 'password': 'correct-password'}),
+                content_type='application/json',
+            ).status_code,
+            200,
+        )
+        logout = client.post('/api/auth/logout')
+        self.assertEqual(logout.status_code, 200)
+        self.assertEqual(client.get('/api/auth/me').status_code, 401)
+
+
+class ReceptionAuthorizationMatrixTests(TestCase):
+    """Admin-only gym/admin APIs: anonymous 401, Reception 403, Super Admin 200."""
+
+    def setUp(self):
+        self.reception = User.objects.create_user(username='matrix-reception', password='password123')
+        Group.objects.get_or_create(name='Reception')[0].user_set.add(self.reception)
+        self.super_admin = User.objects.create_superuser(
+            username='matrix-super',
+            email='matrix-super@example.com',
+            password='password123',
+        )
+        Group.objects.get_or_create(name='Super Admin')[0].user_set.add(self.super_admin)
+        self.admin_gets = (
+            '/api/admin/users',
+            '/api/fitness/trainers',
+            '/api/fitness/expenses',
+            '/api/notifications/settings',
+            '/api/fitness/reports/overview',
+            '/api/fitness/reports/trainers',
+        )
+        self.admin_posts = (
+            (
+                '/api/fitness/plans',
+                {'name': 'Matrix Plan', 'duration_months': 1, 'price': '100.00'},
+            ),
+            (
+                '/api/fitness/classes',
+                {'name': 'Matrix Class', 'class_type': 'boxing'},
+            ),
+            (
+                '/api/fitness/trainers',
+                {'first_name': 'Matrix', 'last_name': 'Trainer'},
+            ),
+            (
+                '/api/admin/users',
+                {
+                    'username': 'matrix-new-staff',
+                    'password': 'DeskPass-2026!',
+                    'first_name': 'New',
+                    'last_name': 'Staff',
+                    'email': 'matrix-new@example.com',
+                    'role': 'Reception',
+                },
+            ),
+        )
+
+    def test_unauthenticated_admin_routes_are_401(self):
+        for path in self.admin_gets:
+            self.assertEqual(self.client.get(path).status_code, 401, path)
+        for path, payload in self.admin_posts:
+            response = self.client.post(path, data=json.dumps(payload), content_type='application/json')
+            self.assertEqual(response.status_code, 401, path)
+
+    def test_reception_is_forbidden_on_admin_routes(self):
+        self.client.force_login(self.reception)
+        for path in self.admin_gets:
+            self.assertEqual(self.client.get(path).status_code, 403, path)
+        for path, payload in self.admin_posts:
+            response = self.client.post(path, data=json.dumps(payload), content_type='application/json')
+            self.assertEqual(response.status_code, 403, path)
+        self.assertFalse(User.objects.filter(username='matrix-new-staff').exists())
+
+    def test_super_admin_can_access_admin_routes(self):
+        self.client.force_login(self.super_admin)
+        for path in self.admin_gets:
+            self.assertEqual(self.client.get(path).status_code, 200, path)
+        for path, payload in self.admin_posts:
+            response = self.client.post(path, data=json.dumps(payload), content_type='application/json')
+            self.assertEqual(response.status_code, 200, path)
+        self.assertTrue(User.objects.filter(username='matrix-new-staff').exists())
+
+    def test_reception_keeps_operational_desk_access(self):
+        self.client.force_login(self.reception)
+        self.assertEqual(self.client.get('/api/fitness/members').status_code, 200)
+        self.assertEqual(self.client.get('/api/fitness/plans').status_code, 200)
+        self.assertEqual(self.client.get('/api/fitness/classes').status_code, 200)
+        self.assertEqual(self.client.get('/api/fitness/payments').status_code, 200)
+

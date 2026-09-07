@@ -4,15 +4,20 @@ MAX_PAGE_SIZE = 500
 DEFAULT_PAGE_SIZE = 500
 
 
+def _as_int(value, default):
+    if value is None or value == '':
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def parse_list_page(limit, offset):
-    if offset is None or int(offset) < 0:
+    offset = _as_int(offset, 0)
+    if offset < 0:
         offset = 0
-    else:
-        offset = int(offset)
-    if limit is None:
-        limit = DEFAULT_PAGE_SIZE
-    else:
-        limit = int(limit)
+    limit = _as_int(limit, DEFAULT_PAGE_SIZE)
     if limit < 1:
         limit = 1
     if limit > MAX_PAGE_SIZE:

@@ -110,6 +110,10 @@ def _get_booking_or_404(booking_id: int) -> Booking:
 
 @api_controller("/auth", tags=["Auth"])
 class AuthController(ControllerBase):
+    # Login/logout stay CSRF-exempt on purpose: they use auth=None to bootstrap
+    # (or tear down) the Django session cookie. Ninja cookie CSRF only runs on
+    # session_auth / gym_staff_auth. Requiring X-CSRFToken here would break the
+    # existing SPA, which POSTs /api/auth/login without that header.
     @http_post("/login", response={200: MeOut, 401: ErrorOut, 429: ErrorOut}, auth=None)
     def login_view(self, payload: LoginIn):
         request = self.context.request

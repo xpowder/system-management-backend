@@ -241,7 +241,13 @@ if ON_RAILWAY:
         )
 
 CORS_ALLOW_CREDENTIALS = True
-CORS_EXPOSE_HEADERS = ['Content-Disposition']
+CORS_EXPOSE_HEADERS = [
+    'Content-Disposition',
+    'X-Total-Count',
+    'X-Limit',
+    'X-Offset',
+    'X-Has-More',
+]
 
 CSRF_TRUSTED_ORIGINS = list(CORS_ALLOWED_ORIGINS)
 

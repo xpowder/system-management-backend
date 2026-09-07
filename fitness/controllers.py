@@ -10,6 +10,7 @@ from ninja import Query, Router
 from ninja.errors import HttpError
 
 from django.contrib.auth.models import User
+from django.http import HttpResponse
 from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
 from django.db.models import Count, DecimalField, F, Max, OuterRef, Prefetch, Q, Subquery, Sum, Value
@@ -20,6 +21,7 @@ from fitness.attendance import attendance_data, class_headcount, desk_member, li
 from fitness.dashboard import build_dashboard_summary, parse_dashboard_date
 from fitness.exports import cash_log_pdf_response, cash_log_xlsx_response, monthly_pdf_response, monthly_xlsx_response
 from fitness.models import Attendance, ClassMember, ClassSchedule, ExpenseCategory, FitnessClassType, GymExpense, GymNotification, GymNotificationSettings, GymPayment, GymWhatsAppReminder, Membership, MembershipPlan, PaymentStatusOverride, Trainer, TrainerPayroll, TrainingClass, membership_paid_total_annotation
+from fitness.pagination import apply_pagination_headers, parse_list_page
 from fitness.receipts import receipt_html_response, receipt_number, receipt_pdf_response
 from fitness.schedules import calendar_items, parse_calendar_bounds, parse_color, parse_group, parse_weekday, weekday_name, weekdays_in_range
 from fitness.schemas import AttendanceCheckOutIn, AttendanceDeskOut, AttendanceIn, AttendanceLookupOut, AttendanceOut, ClassCalendarOut, ClassMemberIn, ClassMemberOut, ClassRevenueReportOut, ClassScheduleIn, ClassScheduleOut, DashboardSummaryOut, ExpenseCategoryTotalOut, GymExpenseIn, GymExpenseOut, GymPaymentIn, GymPaymentOut, Member360Out, MemberClassIn, MemberClassOut, MemberIn, MemberOut, MemberQrLookupOut, MembershipIn, MembershipOut, MembershipPriceIn, MembershipRemainingIn, MonthlyOverviewOut, NotificationOut, NotificationSettingsIn, NotificationSettingsOut, PaymentStatusUpdateIn, PlanIn, PlanOut, TrainerIn, TrainerOut, TrainerPayrollIn, TrainerPayrollReportOut, TrainingClassIn, TrainingClassOut, WhatsAppReminderListOut, WhatsAppReminderOut, WhatsAppReminderSentIn
@@ -941,14 +943,20 @@ def class_revenue_report(request, year: Optional[int] = None, month: Optional[in
 
 
 @router.get('/fitness/members', response=List[MemberOut])
-def list_members(request, search: Optional[str] = None):
+def list_members(
+    request,
+    response: HttpResponse,
+    search: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+):
     queryset = ClientProfile.objects.select_related('user').filter(is_active=True).prefetch_related(
         Prefetch(
             'fitness_memberships',
             queryset=ClassMember.objects.filter(is_active=True).select_related('training_class'),
             to_attr='active_classes',
         )
-    )
+    ).order_by('user__first_name', 'user__last_name', 'id')
     if search:
         term = search.strip()
         query = (
@@ -963,7 +971,11 @@ def list_members(request, search: Optional[str] = None):
         if len(parts) >= 2:
             query |= Q(user__first_name__icontains=parts[0], user__last_name__icontains=parts[-1])
         queryset = queryset.filter(query)
-    return [member_data(item) for item in queryset[:500]]
+    total = queryset.count()
+    limit, offset = parse_list_page(limit, offset)
+    items = [member_data(item) for item in queryset[offset:offset + limit]]
+    apply_pagination_headers(response, total=total, limit=limit, offset=offset, returned=len(items))
+    return items
 
 
 @router.get('/fitness/members/qr/{token}', response=MemberQrLookupOut)

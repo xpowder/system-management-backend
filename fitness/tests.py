@@ -1030,6 +1030,75 @@ class MemberIdentityApiTest(TestCase):
         self.assertEqual(found.json()[0]['name'], 'Pay Balance')
 
 
+class MembersPaginationApiTest(TestCase):
+    def setUp(self):
+        self.staff = User.objects.create_user(username='page-staff', is_staff=True)
+        self.client.force_login(self.staff)
+        for index in range(47):
+            user = User.objects.create_user(
+                username=f'page-member-{index:02d}',
+                first_name=f'Member{index:02d}',
+                last_name='Paged',
+            )
+            ClientProfile.objects.create(user=user, id_number=f'PAGE-{index:02d}')
+
+    def test_limit_and_offset_return_only_the_requested_page(self):
+        first = self.client.get('/api/fitness/members?limit=15&offset=0')
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(len(first.json()), 15)
+        self.assertEqual(first['X-Total-Count'], '47')
+        self.assertEqual(first['X-Limit'], '15')
+        self.assertEqual(first['X-Offset'], '0')
+        self.assertEqual(first['X-Has-More'], 'true')
+
+        second = self.client.get('/api/fitness/members?limit=15&offset=15')
+        self.assertEqual(len(second.json()), 15)
+        self.assertEqual(second['X-Offset'], '15')
+        self.assertEqual(second['X-Has-More'], 'true')
+        self.assertNotEqual(first.json()[0]['id'], second.json()[0]['id'])
+
+        last = self.client.get('/api/fitness/members?limit=15&offset=45')
+        self.assertEqual(len(last.json()), 2)
+        self.assertEqual(last['X-Has-More'], 'false')
+
+    def test_omitted_limit_keeps_the_existing_500_cap(self):
+        response = self.client.get('/api/fitness/members')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()), 47)
+        self.assertEqual(response['X-Total-Count'], '47')
+        self.assertEqual(response['X-Limit'], '500')
+        self.assertEqual(response['X-Has-More'], 'false')
+
+    def test_search_is_applied_before_pagination(self):
+        response = self.client.get('/api/fitness/members?search=Member00&limit=15&offset=0')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()), 1)
+        self.assertEqual(response['X-Total-Count'], '1')
+        self.assertEqual(response.json()[0]['name'], 'Member00 Paged')
+
+    def test_empty_page_and_clamped_values(self):
+        empty = self.client.get('/api/fitness/members?limit=15&offset=500')
+        self.assertEqual(empty.status_code, 200)
+        self.assertEqual(empty.json(), [])
+        self.assertEqual(empty['X-Total-Count'], '47')
+        self.assertEqual(empty['X-Has-More'], 'false')
+
+        negative = self.client.get('/api/fitness/members?limit=-5&offset=-10')
+        self.assertEqual(negative.status_code, 200)
+        self.assertEqual(len(negative.json()), 1)
+        self.assertEqual(negative['X-Limit'], '1')
+        self.assertEqual(negative['X-Offset'], '0')
+
+        oversized = self.client.get('/api/fitness/members?limit=9999&offset=0')
+        self.assertEqual(oversized.status_code, 200)
+        self.assertEqual(len(oversized.json()), 47)
+        self.assertEqual(oversized['X-Limit'], '500')
+
+    def test_response_body_stays_a_json_array(self):
+        response = self.client.get('/api/fitness/members?limit=15&offset=0')
+        self.assertIsInstance(response.json(), list)
+
+
 class AttendanceDeskApiTest(TestCase):
     def setUp(self):
         self.staff = User.objects.create_user(username='desk-staff', is_staff=True)
