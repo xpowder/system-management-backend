@@ -110,6 +110,26 @@ def _exact_member(query):
     return None
 
 
+def member_text_search_q(search: str) -> Q:
+    """Match phone/email/id/address fields, and first+last when the query has spaces."""
+    raw = (search or '').strip()
+    if not raw:
+        return Q()
+    filters = (
+        Q(user__first_name__icontains=raw)
+        | Q(user__last_name__icontains=raw)
+        | Q(phone__icontains=raw)
+        | Q(user__email__icontains=raw)
+        | Q(id_number__icontains=raw)
+        | Q(address__icontains=raw)
+    )
+    parts = [part for part in raw.split() if part]
+    if len(parts) >= 2:
+        filters |= Q(user__first_name__icontains=parts[0], user__last_name__icontains=parts[-1])
+        filters |= Q(user__first_name__icontains=parts[-1], user__last_name__icontains=parts[0])
+    return filters
+
+
 def lookup_members(query, limit=8):
     raw = (query or '').strip()
     exact = _exact_member(raw)
@@ -118,12 +138,7 @@ def lookup_members(query, limit=8):
     if len(raw) < 2:
         return False, []
     digits = _digits(raw)
-    filters = (
-        Q(user__first_name__icontains=raw)
-        | Q(user__last_name__icontains=raw)
-        | Q(phone__icontains=raw)
-        | Q(id_number__icontains=raw)
-    )
+    filters = member_text_search_q(raw)
     if len(digits) >= 4:
         filters |= Q(phone__icontains=digits)
     members = list(

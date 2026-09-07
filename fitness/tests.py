@@ -1011,6 +1011,24 @@ class MemberIdentityApiTest(TestCase):
         self.assertEqual(found.status_code, 200)
         self.assertEqual(found.json()[0]['id_number'], 'AB987654')
 
+    def test_members_can_be_found_by_full_name(self):
+        created = self.client.post(
+            '/api/fitness/members',
+            data=json.dumps({
+                'first_name': 'Pay',
+                'last_name': 'Balance',
+                'id_number': 'QAFULLNAME1',
+                'phone': '0611999888',
+                'address': 'QA Street',
+                'city': 'Casablanca',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(created.status_code, 200)
+        found = self.client.get('/api/fitness/members?search=Pay%20Balance')
+        self.assertEqual(found.status_code, 200)
+        self.assertEqual(found.json()[0]['name'], 'Pay Balance')
+
 
 class AttendanceDeskApiTest(TestCase):
     def setUp(self):
