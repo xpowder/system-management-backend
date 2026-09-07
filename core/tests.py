@@ -42,14 +42,14 @@ class SpaAndDeliveryTests(TestCase):
     @override_settings(
         DEBUG=False,
         TESTING=False,
-        FRONTEND_ORIGIN="https://system-management-production-5616.up.railway.app",
+        FRONTEND_ORIGIN="https://system-management.up.railway.app",
     )
     def test_production_root_redirects_to_the_frontend(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 302)
         self.assertEqual(
             response["Location"],
-            "https://system-management-production-5616.up.railway.app",
+            "https://system-management.up.railway.app",
         )
 
     def test_check_delivery_passes_with_a_staff_user(self):
@@ -254,22 +254,22 @@ class FrontendOriginTests(TestCase):
         hosts, cors = merge_frontend_origin(
             ["api.example.com"],
             ["http://localhost:5173"],
-            "https://system-management-production-5616.up.railway.app",
+            "https://system-management.up.railway.app",
         )
-        self.assertIn("system-management-production-5616.up.railway.app", hosts)
-        self.assertIn("https://system-management-production-5616.up.railway.app", cors)
+        self.assertIn("system-management.up.railway.app", hosts)
+        self.assertIn("https://system-management.up.railway.app", cors)
 
     def test_cross_site_cookies_when_frontend_is_a_different_host(self):
         self.assertTrue(
             uses_cross_site_cookies(
-                "https://system-management-production-5616.up.railway.app",
+                "https://system-management.up.railway.app",
                 "other-service.up.railway.app",
             )
         )
         self.assertFalse(
             uses_cross_site_cookies(
-                "https://system-management-production-5616.up.railway.app",
-                "system-management-production-5616.up.railway.app",
+                "https://system-management.up.railway.app",
+                "system-management.up.railway.app",
             )
         )
 

@@ -47,9 +47,20 @@ if ON_RAILWAY:
 
 FRONTEND_ORIGIN = config(
     "DJANGO_FRONTEND_ORIGIN",
-    default="https://system-management-production-5616.up.railway.app" if ON_RAILWAY else "",
+    default="https://system-management.up.railway.app" if ON_RAILWAY else "",
+)
+# Migrate the previous Railway SPA hostname if still set in service variables.
+if (FRONTEND_ORIGIN or "").rstrip("/") == "https://system-management-production-5616.up.railway.app":
+    FRONTEND_ORIGIN = "https://system-management.up.railway.app"
+# Production SPA host(s). Merged into CORS/CSRF/hosts even when an older
+# DJANGO_FRONTEND_ORIGIN is still set on the Railway service.
+_RAILWAY_SPA_ORIGINS = (
+    "https://system-management.up.railway.app",
 )
 ALLOWED_HOSTS, _ = merge_frontend_origin(ALLOWED_HOSTS, [], FRONTEND_ORIGIN)
+if ON_RAILWAY:
+    for _spa in _RAILWAY_SPA_ORIGINS:
+        ALLOWED_HOSTS, _ = merge_frontend_origin(ALLOWED_HOSTS, [], _spa)
 _production_errors = production_misconfigurations(DEBUG, SECRET_KEY, ALLOWED_HOSTS, TESTING)
 if _production_errors:
     raise ImproperlyConfigured(" ".join(_production_errors))
@@ -221,6 +232,13 @@ ALLOWED_HOSTS, CORS_ALLOWED_ORIGINS = merge_frontend_origin(
     CORS_ALLOWED_ORIGINS,
     FRONTEND_ORIGIN,
 )
+if ON_RAILWAY:
+    for _spa in _RAILWAY_SPA_ORIGINS:
+        ALLOWED_HOSTS, CORS_ALLOWED_ORIGINS = merge_frontend_origin(
+            ALLOWED_HOSTS,
+            CORS_ALLOWED_ORIGINS,
+            _spa,
+        )
 
 CORS_ALLOW_CREDENTIALS = True
 CORS_EXPOSE_HEADERS = ['Content-Disposition']

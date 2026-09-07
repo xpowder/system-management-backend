@@ -131,9 +131,11 @@ class AuthController(ControllerBase):
         return MeOut.from_user(user)
 
 
-    @http_post("/logout", auth=session_auth)
+    @http_post("/logout", auth=None)
     def logout_view(self):
-        logout(self.context.request)
+        request = self.context.request
+        logout(request)
+        request.session.flush()
         return {"ok": True}
 
     @http_get("/me", response=MeOut, auth=session_auth)

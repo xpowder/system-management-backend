@@ -120,17 +120,8 @@ def seed(member_count: int = 520) -> None:
     plan.is_active = True
     plan.save()
 
-    training, _ = TrainingClass.objects.get_or_create(
-        name="QA Fitness",
-        defaults={
-            "class_type": FitnessClassType.MUSCULATION,
-            "price_per_member": Decimal("50.00"),
-            "is_active": True,
-        },
-    )
-
     trainer, _ = Trainer.objects.get_or_create(
-        first_name="QA",
+        first_name="Nabil",
         last_name="Coach",
         defaults={
             "specialization": "General",
@@ -139,6 +130,23 @@ def seed(member_count: int = 520) -> None:
             "is_active": True,
         },
     )
+    trainer.first_name = "Nabil"
+    trainer.last_name = "Coach"
+    trainer.is_active = True
+    trainer.save()
+
+    training, _ = TrainingClass.objects.get_or_create(
+        name="QA Boxing",
+        defaults={
+            "class_type": FitnessClassType.BOXING,
+            "price_per_member": Decimal("50.00"),
+            "is_active": True,
+        },
+    )
+    training.name = "QA Boxing"
+    training.class_type = FitnessClassType.BOXING
+    training.is_active = True
+    training.save()
 
     ClassSchedule.objects.get_or_create(
         training_class=training,
@@ -207,7 +215,7 @@ def seed(member_count: int = 520) -> None:
     payment_member = clients[0]
     payment_member.is_active = True
     payment_member.user.first_name = "Pay"
-    payment_member.user.last_name = "Target"
+    payment_member.user.last_name = "Balance"
     payment_member.user.save(update_fields=["first_name", "last_name"])
     payment_member.save(update_fields=["is_active"])
 
@@ -220,8 +228,8 @@ def seed(member_count: int = 520) -> None:
         inactive_member.save(update_fields=["is_active"])
 
     searchable = clients[2] if len(clients) > 2 else payment_member
-    searchable.user.first_name = "UniqueSearch"
-    searchable.user.last_name = "Zebraqa"
+    searchable.user.first_name = "Zaynab"
+    searchable.user.last_name = "QaSearch"
     searchable.user.save(update_fields=["first_name", "last_name"])
     searchable.is_active = True
     searchable.save(update_fields=["is_active"])
@@ -311,8 +319,8 @@ def seed(member_count: int = 520) -> None:
 
     now = timezone.now()
     GymExpense.objects.get_or_create(
-        category=ExpenseCategory.RENT,
-        title="QA Rent",
+        category=ExpenseCategory.ELECTRICITY,
+        title="QA electricity",
         year=now.year,
         month=now.month,
         defaults={"amount": Decimal("1500.00"), "notes": "Frontend QA"},
